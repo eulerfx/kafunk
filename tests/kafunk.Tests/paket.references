@@ -1,4 +1,5 @@
 FSharp.Control.AsyncSeq
+Hopac
 group Test
 NUnit
 NUnit.Runners
