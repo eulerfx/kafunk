@@ -216,13 +216,11 @@ module internal Chan =
       Request.Write (apiVer, req, BinaryZipper(buf))
       buf,(apiKey,apiVer)
 
-    let bz = BinaryZipper (Binary.empty)
+    
 
     /// Decodes the session layer input and session state into a response.
     let decode (_, (apiKey:ApiKey,apiVer:ApiVersion), buf:Binary.Segment) =
-      bz.Buffer <- buf
-      let r = ResponseMessage.Read (apiKey,apiVer,bz)
-      r
+      ResponseMessage.Read (apiKey,apiVer,BinaryZipper(buf))
 
     let session =
       Session.requestReply

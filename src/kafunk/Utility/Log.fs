@@ -9,7 +9,9 @@ open System.IO
 /// Triggers are placed into a buffer, and published on a separate thread.
 type internal AsyncEvent<'a> (bufferSize:int) =
   let mutable st = 0
-  let buf = new BlockingCollection<'a> (bufferSize)
+  let buf = 
+    if bufferSize = 0 then new BlockingCollection<'a> ()
+    else new BlockingCollection<'a> (bufferSize)
   let evt = new Event<'a>()
   let trigger () =
     for a in buf.GetConsumingEnumerable () do
@@ -82,7 +84,7 @@ module Log =
   open System.IO
   open System.Text
 
-  let private event = new AsyncEvent<LogEntry>(1000000)
+  let private event = new AsyncEvent<LogEntry>(0)
   
   /// Publishes all log events.
   let Event = event.Publish
@@ -90,24 +92,23 @@ module Log =
   /// Creates a logger with the specified name.
   let create name = { name = name ; publisher = event }
 
+  /// Gets/sets the minimum logging level for the Console log event printer.
+  let mutable MinLevel = LogLevel.Info
 
   /// Creates and subscribes a Console log event printer.
-  let private consolePrinter (minLevel:LogLevel) (bufferSize:int) =
+  let private consolePrinter (bufferSize:int) =
     let stdout = Console.OpenStandardOutput (bufferSize)
     let sw = new StreamWriter(stdout, Encoding.Default, bufferSize)
     sw.AutoFlush <- true
     let dispose = Disposable.ofFun (fun () -> sw.Dispose () )
     let subs = Event.Subscribe (fun e -> 
-      if e.level >= minLevel then
+      if e.level >= MinLevel then
         LogEntry.Print (e, sw))
     Disposable.ofDisposables [ subs ; dispose ]
     
-  /// Gets/sets the minimum logging level for the Console log event printer.
-  let mutable MinLevel = LogLevel.Info
-
   /// When disposed, unsubscribes the Console log event printer.
   let ConsolePrinterSubscription = 
-    consolePrinter MinLevel 4096
+    consolePrinter 4096
 
 
 [<AutoOpen>]

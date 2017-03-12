@@ -5,6 +5,7 @@ open FSharp.Control
 open Kafunk
 open System
 
+Log.MinLevel <- LogLevel.Trace
 let Log = Log.create __SOURCE_FILE__
 
 let argiDefault i def = fsi.CommandLineArgs |> Seq.tryItem i |> Option.getOr def
@@ -19,7 +20,7 @@ let go = async {
     let connConfig = 
       let chanConfig = 
         ChanConfig.create (
-          requestTimeout = TimeSpan.FromSeconds 30.0,
+          requestTimeout = TimeSpan.FromSeconds 20.0,
           receiveBufferSize = 8192 * 20,
           sendBufferSize = 8192 * 10,
           connectRetryPolicy = ChanConfig.DefaultConnectRetryPolicy,
@@ -36,8 +37,8 @@ let go = async {
       autoOffsetReset = AutoOffsetReset.StartFromTime Time.EarliestOffset,
       fetchMaxBytes = 5000000,
       fetchBufferSize = 2,
-      sessionTimeout = 10000,
-      heartbeatFrequency = 10,
+      sessionTimeout = 30000,
+      heartbeatFrequency = 3,
       checkCrc = true)
   let! consumer = 
     Consumer.createAsync conn consumerConfig
@@ -76,6 +77,11 @@ let go = async {
 
   do! Consumer.consumePeriodicCommit consumer (TimeSpan.FromSeconds 10.0) handle
   //do! Consumer.stream consumer |> AsyncSeq.iterAsync (fun (s,ms) -> handle s ms)
+//  do! 
+//    Consumer.generations consumer
+//    |> AsyncSeq.iterAsync (fun (s,ps) -> async {
+//      Log.info "geneneration|generation_id=%i" s.generationId })
+  //do! Async.never
 
 }
 

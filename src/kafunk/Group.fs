@@ -1,9 +1,7 @@
 ﻿namespace Kafunk
 
 open FSharp.Control
-open System
 open System.Threading
-open System.Threading.Tasks
 open Kafunk
 
 /// Internal state corresponding to a single generation of the group protocol.
@@ -257,7 +255,9 @@ module Group =
             match res with
             | Success res ->
               match res.errorCode with
-              | ErrorCode.NoError -> 
+              | ErrorCode.NoError ->
+                Log.trace "heartbeat_acked|conn_id=%s group_id=%s generation=%i member_id=%s n=%i"
+                  conn.Config.connId cfg.groupId state.state.generationId state.state.memberId count
                 return true
               | ErrorCode.IllegalGenerationCode | ErrorCode.UnknownMemberIdCode | ErrorCode.RebalanceInProgressCode 
               | ErrorCode.NotCoordinatorForGroupCode ->

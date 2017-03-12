@@ -3,7 +3,6 @@ namespace Kafunk
 open FSharp.Control
 open System
 open System.Threading
-open System.Threading.Tasks
 open Kafunk
 
 /// The consumer group protocol.
@@ -578,7 +577,7 @@ module Consumer =
       let topic,assignment = state.state.memberAssignment |> ConsumerGroup.decodeMemberAssignment
       Log.info "consumer_group_assignment_received|conn_id=%s group_id=%s topic=%s partitions=[%s]"
         c.conn.Config.connId cfg.groupId topic (Printers.partitions assignment)
-      
+            
       if assignment.Length = 0 then
         Log.error "no_partitions_assigned|conn_id=%s group_id=%s member_id=%s topic=%s" 
           c.conn.Config.connId cfg.groupId state.state.memberId topic
@@ -617,10 +616,18 @@ module Consumer =
             let req = 
               let os = [| topic, offsets |> Array.map (fun (p,o) -> p,o,cfg.fetchMaxBytes) |]
               FetchRequest(-1, cfg.fetchMaxWaitMs, cfg.fetchMinBytes, os)
+            //let t0 = Diagnostics.Stopwatch.GetTimestamp ()
             let! res = fetch req
+            //let t1 = Diagnostics.Stopwatch.GetTimestamp ()
+            //let t = TimeSpan(t1 - t0)
             match res with
             | Success res ->
-              
+//              let size = 
+//                res.topics 
+//                |> Seq.sumBy (fun (_,ps) -> ps |> Seq.sumBy (fun (_,_,_,mss,_) -> mss))
+//              Log.trace "fetch_completed|elapsed_ms=%f size=%i topic=%s offsets=%s" 
+//                t.TotalMilliseconds size topic (Printers.partitionOffsetPairs offsets)
+
               let oks,ends,outOfRange,staleMetadata =
                 res.topics
                 |> Seq.collect (fun (t,ps) ->

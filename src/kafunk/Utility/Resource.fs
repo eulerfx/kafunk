@@ -3,7 +3,6 @@ module internal Kafunk.Resource
 
 open System
 open System.Threading
-open System.Threading.Tasks
 open Kafunk
 
 /// A result of a resource-dependent operation.

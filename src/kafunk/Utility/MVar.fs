@@ -5,8 +5,6 @@ module internal Kafunk.MVar
 // TODO: https://github.com/fsprojects/FSharpx.Async
 
 open System
-open System.Threading
-open System.Threading.Tasks
 
 type private MVarReq<'a> =
   | PutAsync of Async<'a> * IVar<'a>
@@ -21,7 +19,7 @@ type MVar<'a> internal (?a:'a) =
   let [<VolatileField>] mutable state : 'a option = None
 
   let mbp = MailboxProcessor.Start (fun mbp -> async {
-    let rec init () = async {
+    let rec empty () = async {
       return! mbp.Scan (function
         | PutAsync (a,rep) ->
           Some (async {
@@ -29,25 +27,25 @@ type MVar<'a> internal (?a:'a) =
               let! a = a
               state <- Some a
               IVar.put a rep
-              return! loop a
+              return! full a
             with ex ->
               state <- None
               IVar.error ex rep
-              return! init () })
+              return! empty () })
         | PutOrUpdateAsync (update,rep) ->
           Some (async {
             try
               let! a = update None
               state <- Some a
               IVar.put a rep
-              return! loop (a)
+              return! full (a)
             with ex ->
               state <- None
               IVar.error ex rep
-              return! init () })
+              return! empty () })
         | _ ->
           None) }
-    and loop (a:'a) = async {
+    and full (a:'a) = async {
       let! msg = mbp.Receive()
       match msg with
       | PutAsync (a',rep) ->
@@ -55,37 +53,38 @@ type MVar<'a> internal (?a:'a) =
           let! a = a'
           state <- Some a
           IVar.put a rep
-          return! loop (a)
+          return! full (a)
         with ex ->
           state <- Some a
           IVar.error ex rep
-          return! loop (a)
+          return! full (a)
       | PutOrUpdateAsync (update,rep) ->
         try
           let! a = update (Some a)
           state <- Some a
           IVar.put a rep
-          return! loop (a)
+          return! full (a)
         with ex ->
           state <- Some a
           IVar.error ex rep
-          return! loop (a)
+          return! full (a)
       | Get rep ->
         IVar.put a rep
-        return! loop (a)
+        return! full (a)
       | Take (rep) ->
         state <- None
         IVar.put a rep
-        return! init ()
+        return! empty ()
       | UpdateAsync f ->
         let! a = f a
-        return! loop a }
+        state <- Some a
+        return! full a }
     match a with
     | Some a ->
       state <- Some a
-      return! loop (a)
+      return! full (a)
     | None -> 
-      return! init () })
+      return! empty () })
 
   do mbp.Error.Add (fun x -> printfn "|MVar|ERROR|%O" x) // shouldn't happen
   
@@ -114,13 +113,13 @@ type MVar<'a> internal (?a:'a) =
     let up a = async {
       try
         let! (a,s) = update a
-        state <- Some a
+        //state <- Some a
         IVar.put s rep
         return a
       with ex ->
-        state <- Some a
+        //state <- Some a
         IVar.error ex rep
-        return a  }
+        return a }
     mbp.Post (UpdateAsync up)
     return! IVar.get rep }
 

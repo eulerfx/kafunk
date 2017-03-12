@@ -4,11 +4,7 @@ namespace Kafunk
 open FSharp.Control
 open System
 open System.Net
-open System.Net.Sockets
-open System.Text
 open System.Threading
-open System.Threading.Tasks
-open System.Collections.Generic
 open Kafunk
 
 /// Connection state.
