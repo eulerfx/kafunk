@@ -769,7 +769,7 @@ module Consumer =
                 c.config.groupId state.state.generationId state.state.memberId topic msg
             return Some (mss, (nextOffsets,retryQueue)) })
 
-  /// Consumes per-broker fetch streams and dispatches to per-partition buffers.
+  /// Discovers cluster state, then consumes per-broker fetch streams, dispatching to per-partition buffers.
   let private fetchProcess
     (c:Consumer)
     (state)
@@ -777,8 +777,9 @@ module Consumer =
     (offsets:(Partition * Offset)[])
     (partitionBuffers:Map<Partition, BoundedMb<ConsumerMessageSet>>) = async {
 
-    let assignment = offsets |> Seq.map fst |> Seq.toArray
     let cfg = c.config
+    let assignment = offsets |> Seq.map fst |> Seq.toArray
+        
     let! clusterState = c.conn.GetMetadataState [|topic|]
 
     let offsetsByBroker : (Chan * (Partition * Offset)[])[] =
@@ -804,11 +805,14 @@ module Consumer =
         cfg.groupId state.state.generationId state.state.memberId topic (assignment.Length))
     Log.info "starting_fetch_process|group_id=%s generation_id=%i member_id=%s topic=%s partition_count=%i" 
       cfg.groupId state.state.generationId state.state.memberId topic (assignment.Length)
+
+    // TODO: if state metadata detected, restart fetch process
+
     return!
       Async.tryFinnallyWithAsync
         (offsetsByBroker
-        |> Seq.map (fun (ch,initOffsets) ->
-          fetchStream c state ch topic initOffsets
+        |> Seq.map (fun (ch,os) ->
+          fetchStream c state ch topic os
           |> AsyncSeq.iterAsync (fun mss -> async {
             let! _ =
               mss
@@ -870,6 +874,7 @@ module Consumer =
       Log.info "fetched_initial_offsets|conn_id=%s group_id=%s member_id=%s topic=%s offsets=%s" 
         c.conn.Config.connId cfg.groupId state.state.memberId topic (Printers.partitionOffsetPairs initOffsets)
         
+      // TODO: restart on stale metadata ; capture offsets
       Async.Start (fetchProcess c state topic initOffsets partitionBuffers, fetchProcessCancellation.Token)
 
       return partitionStreams }
