@@ -85,7 +85,7 @@ type Resource<'r> internal (create:CancellationToken -> 'r option -> Async<'r>, 
   member internal __.Timeout<'a, 'b> (op:'r -> ('a -> Async<'b>)) : 'a -> Async<'b option> =
     fun a -> async {
       let! ep = MVar.get cell
-      return! op ep.resource a |> Async.cancelWithToken ep.closed.Token }
+      return! op ep.resource a |> Async.noneOnCancel ep.closed.Token }
 
   member internal __.InjectResult<'a, 'b> (op:'r -> ('a -> Async<Result<'b, ResourceErrorAction<'b, exn>>>), rp:RetryPolicy, a:'a) : Async<'b> =
     let rec go (rs:RetryState) = async {

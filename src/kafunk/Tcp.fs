@@ -309,8 +309,12 @@ type ReqRepSession<'a, 'b, 's> internal
 
   let txs = new ConcurrentDictionary<CorrelationId, DateTime * 's * TaskCompletionSource<'b>>()
   let cts = new CancellationTokenSource()
+  let mutable last = Diagnostics.Stopwatch.GetTimestamp ()
+
+  let heartbeat () = Interlocked.Exchange (&last, (Diagnostics.Stopwatch.GetTimestamp ())) |> ignore
 
   let demux (data:Binary.Segment) =
+    heartbeat ()
     let sessionData = SessionMessage.decode (data)
     let correlationId = sessionData.tx_id
     let mutable token = Unchecked.defaultof<_>
@@ -328,6 +332,7 @@ type ReqRepSession<'a, 'b, 's> internal
       Log.trace "received_orphaned_response|correlation_id=%i in_flight_requests=%i" correlationId txs.Count
 
   let mux (ct:CancellationToken) (req:'a) =
+    heartbeat ()
     let startTime = DateTime.UtcNow
     let correlationId = correlationId ()
     let rep = TaskCompletionSource<_>()
@@ -363,6 +368,11 @@ type ReqRepSession<'a, 'b, 's> internal
 
   member internal __.Task = receiveTask
 
+  member internal __.LastActivityTicks = last
+
+  member internal __.Close () =
+    cts.Cancel ()
+
   member internal __.Send (req:'a) = async {
     if receiveTask.IsFaulted then return raise receiveTask.Exception else
     let! ct = Async.CancellationToken
@@ -373,7 +383,7 @@ type ReqRepSession<'a, 'b, 's> internal
     return! rep.Task |> Async.awaitTaskCancellationAsError }
 
   interface IDisposable with
-    member x.Dispose() = cts.Dispose()
+    member x.Dispose() = x.Close ()
 
 
 /// Operations on network sessions (layer 5).

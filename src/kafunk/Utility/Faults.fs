@@ -103,7 +103,7 @@ module RetryPolicy =
     | None -> 
       return None
     | Some delay -> 
-      do! Async.sleep delay
+      do! Async.SleepTimeSpan delay
       return Some ((delay, RetryState.next s)) }
 
   /// Returns an async computation which waits for the delay at the specified retry state and returns
@@ -209,7 +209,7 @@ module RetryQueue =
     if now >= latestDue then 
       return dueAt q now
     else
-      do! Async.sleep (latestDue - now)
+      do! Async.SleepTimeSpan (latestDue - now)
       return dueAt q now }
 
   /// Removes an item from the queue, resetting its retry state.
@@ -298,7 +298,7 @@ module internal Faults =
         | None -> 
           return Failure e
         | Some wait ->
-          do! Async.sleep wait
+          do! Async.SleepTimeSpan wait
           return! loop (RetryState.next i) e }
     loop RetryState.init m.Zero
 

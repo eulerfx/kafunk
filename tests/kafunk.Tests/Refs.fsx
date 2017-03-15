@@ -3,3 +3,4 @@
 #r "bin/Release/kafunk.Tests.dll"
 #load "Prelude.fs"
 #load "Async.fs"
+#load "BoundedMb.fs"
