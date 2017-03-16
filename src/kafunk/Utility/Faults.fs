@@ -274,17 +274,8 @@ module internal Faults =
     ||> AsyncSeq.interleaveChoice
     |> AsyncSeq.choose Choice.tryLeft
 
-  let retryAsyncResultRef (m:Monoid<'e>) (p:RetryPolicy) (a:Async<Result<'a, 'e>>) : Async<Result<'a, 'e>> =
-    retryAsyncResultStream p a |> AsyncSeq.sequenceResult m
-    
-  /// Retries an async computation returning a result according to the specified backoff strategy.
-  /// Returns an async computation containing a result, which is Success of a pair of the successful result and errors
-  /// accumulated during retries, if any, and otherwise, a Failure of accumulated errors.
-  let retryAsyncResultWarn (m:Monoid<'e>) (p:RetryPolicy) (a:Async<Result<'a, 'e>>) : Async<Result<'a * 'e, 'e>> =
-    retryAsyncResultStream p a |> AsyncSeq.sequenceResultWarn m
-
-  let retryAsyncResultWarnList (policy:RetryPolicy) (a:Async<Result<'a, 'e>>) : Async<Result<'a * 'e list, 'e list>> =
-    retryAsyncResultWarn Monoid.freeList policy (a |> Async.map (Result.mapError List.singleton))
+//  let retryAsyncResultRef (m:Monoid<'e>) (p:RetryPolicy) (a:Async<Result<'a, 'e>>) : Async<Result<'a, 'e>> =
+//    retryAsyncResultStream p a |> AsyncSeq.sequenceResult m
 
   let retryAsyncResult (m:Monoid<'e>) (p:RetryPolicy) (a:Async<Result<'a, 'e>>) : Async<Result<'a, 'e>> =
     let rec loop i e = async {
@@ -333,12 +324,6 @@ module internal Faults =
 
     let retryResultList (p:RetryPolicy) (f:'a -> Async<Result<'b, 'e>>) : 'a -> Async<Result<'b, 'e list>> =
       fun a -> async.Delay (fun () -> f a) |> retryAsyncResultList p
-
-    let retryResultWarn (m:Monoid<'e>) (p:RetryPolicy) (f:'a -> Async<Result<'b, 'e>>) : 'a -> Async<Result<'b * 'e, 'e>> =
-      fun a -> async.Delay (fun () -> f a) |> retryAsyncResultWarn m p
-
-    let retryResultWarnList (p:RetryPolicy) (f:'a -> Async<Result<'b, 'e>>) : 'a -> Async<Result<'b * 'e list, 'e list>> =
-      fun a -> async.Delay (fun () -> f a) |> retryAsyncResultWarnList p
 
     let retryResultThrow (ex:'e -> #exn) (m:Monoid<'e>) (p:RetryPolicy) (f:'a -> Async<Result<'b, 'e>>) : 'a -> Async<'b> =
       fun a -> async.Delay (fun () -> f a) |> retryResultThrow ex m p

@@ -81,6 +81,16 @@ module IVar =
     let cts = new CancellationTokenSource ()
     i.Task.ContinueWith (fun (t:Task<_>) -> cts.Cancel ()) |> ignore
     cts.Token
+  
+  /// Links an IVar to a Task, such that when the Task completes, the IVar is 
+  /// assigned the result.
+  /// Returns a Task<bool> which completes when the IVar has been set, indicating
+  /// whether it was set for the first time.
+  let link (iv:IVar<'a>) (t:Task<'a>) : Task<bool> =
+    t.ContinueWith (Func<_,_>(fun (t:Task<'a>) ->
+      if t.IsCanceled then tryCancel iv
+      elif t.IsFaulted then tryError t.Exception iv
+      else tryPut t.Result iv))
     
 
 
@@ -264,6 +274,31 @@ module Async =
             cnc ex
         startThreadPoolWithContinuations (a, ok, err, cnc, cts.Token)
         startThreadPoolWithContinuations (b, ok, err, cnc, cts.Token) }
+
+  let chooseAny (xs:Async<'a> seq) : Async<'a> = async {
+    let! ct = Async.CancellationToken
+    return!
+      Async.FromContinuations <| fun (ok,err,cnc) ->
+        let state = ref 0
+        let cts = CancellationTokenSource.CreateLinkedTokenSource ct
+        let cancel () =
+          cts.Cancel()
+          // cts.Dispose()
+        let ok a =
+          if (Interlocked.CompareExchange(state, 1, 0) = 0) then 
+            ok a
+            cancel ()
+        let err (ex:exn) =
+          if (Interlocked.CompareExchange(state, 1, 0) = 0) then 
+            cancel ()
+            err ex
+        let cnc ex =
+          if (Interlocked.CompareExchange(state, 1, 0) = 0) then 
+            cancel ()
+            cnc ex
+        use en = xs.GetEnumerator ()
+        while en.MoveNext () && !state = 0 do
+          startThreadPoolWithContinuations (en.Current, ok, err, cnc, cts.Token) }
 
   let chooseChoice (a:Async<'a>) (b:Async<'b>) : Async<Choice<'a, 'b>> =
     choose (a |> map Choice1Of2) (b |> map Choice2Of2)

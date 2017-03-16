@@ -45,7 +45,7 @@ type ChanConfig = {
   static member DefaultConnectTimeout = TimeSpan.FromSeconds 10
   
   /// The default TCP connection retry policy = RetryPolicy.constantBoundedMs 3000 2.
-  static member DefaultConnectRetryPolicy = RetryPolicy.constantBoundedMs 3000 2
+  static member DefaultConnectRetryPolicy = RetryPolicy.constantBoundedMs 3000 3
   
   /// The default TCP request timeout = 30s.
   static member DefaultRequestTimeout = TimeSpan.FromSeconds 30
@@ -106,9 +106,17 @@ and internal ChanError =
 /// A request/reply TCP channel to a Kafka broker.
 [<CustomEquality;NoComparison>]
 type internal Chan = private {
+  
+  /// The broker IP endpoint.
   ep : EndPoint
+  
+  /// Sends a message to the 
   send : RequestMessage -> Async<ChanResult>
-  task : Task<unit>
+
+  /// A task representing the server loop for this channel.
+  /// Completion of the task indicates that the channel is closed, successfully or in error.
+  serverLoop : Task<unit>
+
 }
   with 
     override this.GetHashCode () = this.ep.GetHashCode ()
@@ -132,7 +140,7 @@ module internal Chan =
   /// Gets the endpoint.
   let endpoint (ch:Chan) = ch.ep
 
-  let internal task (ch:Chan) = ch.task
+  let internal task (ch:Chan) = ch.serverLoop
 
   /// Creates a fault-tolerant channel to the specified endpoint.
   /// Recoverable failures are retried, otherwise escalated.
@@ -264,4 +272,4 @@ module internal Chan =
       |> Faults.AsyncFunc.retryResultList config.requestRetryPolicy
       |> AsyncFunc.mapOut (snd >> Result.mapError (List.map (Choice.fold (konst ChanTimeout) (ChanFailure))))
 
-    return  { ep = ep ; send = send ; task = session.Task } }
+    return  { ep = ep ; send = send ; serverLoop = session.Task } }

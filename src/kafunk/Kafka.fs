@@ -516,7 +516,7 @@ type KafkaConn internal (cfg:KafkaConfig) =
       |> AsyncSeq.ofSeq
       |> AsyncSeq.traverseAsyncResult Exn.monoid (fun ep -> async {
         match connState |> Option.bind (ConnState.tryFindBrokerByEndPoint ep) with
-        | Some ch when not ch.task.IsCompleted ->
+        | Some ch when not ch.serverLoop.IsCompleted ->
           return Success ch
         | _ ->
           try

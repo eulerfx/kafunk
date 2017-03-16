@@ -112,7 +112,7 @@ module internal Printers =
     concatMapSb os (fun sb (p) -> sb.AppendFormat("{0}", p)) ","
 
   let topicPartitions (os:seq<TopicName * Partition>) =
-    concatMapSb os (fun sb (t,p) -> sb.AppendFormat("[t={0} p={0}]", t, p)) ","
+    concatMapSb os (fun sb (t,p) -> sb.AppendFormat("[t={0} p={1}]", t, p)) ","
     
   let partitionOffsetPairs (os:seq<Partition * Offset>) =
     concatMapSb os (fun sb (p,o) -> sb.AppendFormat("[p={0} o={1}]", p, o)) " ; "

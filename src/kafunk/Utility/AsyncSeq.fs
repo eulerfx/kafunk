@@ -127,6 +127,28 @@ module AsyncSeq =
   let interleaveChoice (a:AsyncSeq<'a>) (b:AsyncSeq<'b>) : AsyncSeq<Choice<'a, 'b>> =
     AsyncSeq.interleave (a |> AsyncSeq.map Choice1Of2) (b |> AsyncSeq.map Choice2Of2)
 
+  /// Applies the function to each element of the sequence.
+  /// On Choice1Of2, continues traversing the sequence, collecting the results using Monoid<'b>.
+  /// On Choice2Of2, short-circuits traversal, returning Choice2Of2.
+  let traverseAsyncChoiceMonoid
+    (m:Monoid<'b>)
+    (f:'a -> Async<Choice<'b, 'e>>) 
+    (s:AsyncSeq<'a>) : Async<Choice<'b, 'e>> = async {
+    use en = s.GetEnumerator()
+    let rec go b = async {
+      let! s = en.MoveNext ()
+      match s with
+      | None -> 
+        return Choice1Of2 b
+      | Some hd ->
+        let! r = f hd
+        match r with
+        | Choice1Of2 b' -> 
+          return! go (m.Merge (b,b'))
+        | Choice2Of2 e ->
+          return Choice2Of2 e } 
+    return! go m.Zero }
+
   /// A traversal of an async sequence specialized to the Result type.
   /// Returns the first successful result or a list of all erroneous results.
   let traverseAsyncResult
@@ -148,45 +170,14 @@ module AsyncSeq =
           return! go (m.Merge (e,e')) }
     return! go m.Zero }
 
-  let traverseAsyncResultWarn
-    (m:Monoid<'e>)
-    (f:'a -> Async<Result<'b, 'e>>) 
-    (s:AsyncSeq<'a>) : Async<Result<'b * 'e, 'e>> = async {
-    use en = s.GetEnumerator()
-    let rec go e = async {
-      let! s = en.MoveNext ()
-      match s with
-      | None -> 
-        return Failure e
-      | Some hd ->
-        let! r = f hd
-        match r with
-        | Success a -> 
-          return Success (a,e)
-        | Failure e' -> 
-          return! go (m.Merge (e,e')) }
-    return! go m.Zero }
-
   let traverseAsyncResultList (f:'a -> Async<Result<'b, 'e>>) (s:AsyncSeq<'a>) : Async<Result<'b, 'e list>> =
     traverseAsyncResult Monoid.freeList (f >> Async.map (Result.mapError List.singleton)) s
     
   let traverseResult (m:Monoid<'e>) (f:'a -> Result<'b, 'e>) (s:AsyncSeq<'a>) : Async<Result<'b, 'e>> =
     traverseAsyncResult m (f >> async.Return) s
 
-  let traverseResultWarn (m:Monoid<'e>) (f:'a -> Result<'b, 'e>) (s:AsyncSeq<'a>) : Async<Result<'b * 'e, 'e>> =
-    traverseAsyncResultWarn m (f >> async.Return) s
-
   let traverseResultList (f:'a -> Result<'b, 'e>) (s:AsyncSeq<'a>) : Async<Result<'b, 'e list>> =
     traverseResult (Monoid.freeList) (f >> Result.mapError List.singleton) s
-
-  let sequenceResultWarn (m:Monoid<'e>) (s:AsyncSeq<Result<'a, 'e>>) : Async<Result<'a * 'e, 'e>> =
-    traverseResultWarn m id s
-  
-  let sequenceResult (m:Monoid<'e>) (s:AsyncSeq<Result<'a, 'e>>) : Async<Result<'a, 'e>> =
-    traverseResult m id s
-            
-  let sequenceResultList (s:AsyncSeq<Result<'a, 'e>>) : Async<Result<'a, 'e list>> =
-    traverseResultList id s
 
   let replicateUntilNoneAsync (next:Async<'a option>) : AsyncSeq<'a> =
     AsyncSeq.unfoldAsync 

@@ -84,6 +84,7 @@ module Choice =
 
   let tryRight = function Choice2Of2 x -> Some x | _ -> None
     
+  let flip = function Choice1Of2 a -> Choice2Of2 a | Choice2Of2 b -> Choice1Of2 b
 
 
 // --------------------------------------------------------------------------------------------------
@@ -165,6 +166,9 @@ module Monoid =
 
   let intSum : Monoid<int> =
     monoid 0 ((+))
+
+  let ignore : Monoid<unit> =
+    monoid () (konst ignore)
     
 /// Operations on groups.
 module Group =
