@@ -315,7 +315,7 @@ module Async =
   /// Reference: Async.choose (Async.map Some a) (Async.NoneFromCancellationToken ct)
   let noneOnCancel (ct:CancellationToken) (a:Async<'a>) : Async<'a option> = async {
     let! ct2 = Async.CancellationToken
-    use cts = CancellationTokenSource.CreateLinkedTokenSource (ct, ct2)
+    let cts = CancellationTokenSource.CreateLinkedTokenSource (ct, ct2)
     let res = new TaskCompletionSource<'a option>()
     use _reg = cts.Token.Register (fun () -> res.SetResult None)
     let a = async {

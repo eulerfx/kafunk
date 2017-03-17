@@ -245,7 +245,7 @@ module Producer =
     (messageVer:int16) 
     (ch:Chan) 
     (batch:ProducerMessageBatch seq) = async {
-    //Log.trace "sending_batch|ep=%O batch_count=%i batch_size=%i" (Chan.endpoint ch) (batchCount batch) (batchSizeBytes batch)
+    Log.trace "sending_batch|ep=%O batch_message_count=%i batch_size_bytes=%i" (Chan.endpoint ch) (batchCount batch) (batchSizeBytes batch)
 
     let pms = 
       batch
@@ -363,13 +363,20 @@ module Producer =
 
     let startBrokerQueue (ch:Chan) =
       let sendBatch = sendBatch conn cfg messageVer ch
-      let bufferCond = 
-        BoundedMbCond.group Group.intAdd (fun (b:ProducerMessageBatch) -> b.size) (fun size -> size >= cfg.bufferSizeBytes)
       let batchCond =
         BoundedMbCond.group Group.intAdd (fun (b:ProducerMessageBatch) -> b.size) (fun size -> size >= cfg.batchSizeBytes)
-      let buffer = BoundedMb.createByCondition bufferCond
-      let produceStream = 
-        AsyncSeq.replicateInfiniteAsync (BoundedMb.take buffer)
+      let put,produceStream = 
+        let buffer = new Collections.Concurrent.BlockingCollection<_>()
+        let put = buffer.Add >> async.Return
+        let stream = buffer.GetConsumingEnumerable () |> AsyncSeq.ofSeq
+        put,stream
+//      let put,produceStream = 
+//        let bufferCond = 
+//          BoundedMbCond.group Group.intAdd (fun (b:ProducerMessageBatch) -> b.size) (fun size -> size >= cfg.bufferSizeBytes)
+//        let buffer = BoundedMb.createByCondition bufferCond
+//        let put = flip BoundedMb.put buffer
+//        let stream = AsyncSeq.replicateInfiniteAsync (BoundedMb.take buffer)
+//        put,stream
       let sendProcess =
         if cfg.batchSizeBytes = 0 || cfg.batchLingerMs = 0 then
           produceStream
@@ -388,7 +395,7 @@ module Producer =
       |> Async.tryFinally (fun _ ->
         Log.info "produce_process_stopping|topic=%s ep=%O" cfg.topic (Chan.endpoint ch))
       |> (fun x -> Async.Start (x, queueCts.Token))
-      (flip BoundedMb.put buffer)
+      put
        
     let partitionQueues =
       let qs = Dict.ofSeq []

@@ -147,12 +147,11 @@ module internal Chan =
   /// Only a single channel per endpoint is needed.
   let connect (connId:string, version:System.Version, config:ChanConfig, clientId:ClientId) (ep:EndPoint) : Async<Chan> = async {
     
-    let lastActivityTicks = ref (Diagnostics.Stopwatch.GetTimestamp ())
-
-    let hb () = lastActivityTicks := (Diagnostics.Stopwatch.GetTimestamp ())
+    //let lastActivityTicks = ref (Diagnostics.Stopwatch.GetTimestamp ())
+    //let hb () = lastActivityTicks := (Diagnostics.Stopwatch.GetTimestamp ())
 
     let conn (ep:EndPoint) = async {
-      hb ()
+      //hb ()
       let ipep = EndPoint.endpoint ep
       let connSocket =
         new Socket(
@@ -197,7 +196,6 @@ module internal Chan =
       |> Resource.inject Socket.sendAll
 
     // TODO: close when idle
-
     let! receive =
       let receive s buf = async {
         try
@@ -239,8 +237,6 @@ module internal Chan =
       Session.requestReply
         Session.corrId encode decode RequestMessage.awaitResponse receiveStream send
 
-    
-
     let send =
       Session.send session
 
@@ -272,4 +268,4 @@ module internal Chan =
       |> Faults.AsyncFunc.retryResultList config.requestRetryPolicy
       |> AsyncFunc.mapOut (snd >> Result.mapError (List.map (Choice.fold (konst ChanTimeout) (ChanFailure))))
 
-    return  { ep = ep ; send = send ; serverLoop = session.Task } }
+    return  { ep = ep ; send = send ; serverLoop = session.Loop } }

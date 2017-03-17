@@ -625,7 +625,9 @@ module Consumer =
             |> Seq.map (fun (p,ec,hwmo,mss,ms) -> 
               match ec with
               | ErrorCode.NoError ->
-                if mss = 0 then Choice2Of4 (p,hwmo)
+                if mss = 0 then 
+                  Choice4Of4 (p)
+                  //Choice2Of4 (p,hwmo)
                 else 
                   let ms = Compression.decompress c.messageVer ms
                   if cfg.checkCrc then
@@ -797,7 +799,7 @@ module Consumer =
             return Some (Success mss, (nextOffsets,retryQueue)) })
 
   type private FetchProcResult =
-    | FetchProcCompleted
+    | FetchProcCompleted of lastFetchedOffsets:(Partition * Offset)[]
     | FetchProcStateMetadata of lastFetchedOffsets:(Partition * Offset)[]
 
   /// Discovers cluster state, then consumes per-broker fetch streams, dispatching to per-partition buffers.
@@ -808,25 +810,29 @@ module Consumer =
     (partitionBuffers:Map<Partition, BoundedMb<ConsumerMessageSet>>) = async {
 
     let cfg = c.config
-    let assignment = offsets |> Seq.map fst |> Seq.toArray
-      
-    use! _cnc = Async.OnCancel (fun () -> 
-      Log.warn "cancelling_fetch_process|group_id=%s generation_id=%i member_id=%s topic=%s partition_count=%i"
-        cfg.groupId state.state.generationId state.state.memberId topic (assignment.Length))
 
-    Log.info "starting_fetch_process|group_id=%s generation_id=%i member_id=%s topic=%s partition_count=%i" 
-      cfg.groupId state.state.generationId state.state.memberId topic (assignment.Length)
-        
-    let! clusterState = c.conn.GetMetadataState [|topic|]
+    Log.info "starting_fetch_process|group_id=%s generation_id=%i member_id=%s topic=%s offsets=[%s]" 
+      cfg.groupId state.state.generationId state.state.memberId topic (Printers.partitionOffsetPairs offsets)
+
+    /// Returns the broker topology for the specified topic partitions.
+    let getBrokerTopology (topic:TopicName, ps:Partition[]) : Async<Map<Partition, Chan>> = async {
+      let! clusterState = c.conn.GetMetadataState [|topic|]
+      return
+        ps
+        |> Seq.map (fun p ->
+          match ConnState.tryFindTopicPartitionBroker (topic,p) clusterState with
+          | Some ch -> p,ch
+          | None -> failwithf "unable to find broker for topic=%s partition=%i" topic p)
+        |> Map.ofSeq }
+
+    let! brokerTopology = getBrokerTopology (topic,offsets |> Seq.map fst |> Seq.toArray)
 
     let offsetsByBroker : (Chan * (Partition * Offset)[])[] =
-      offsets
-      |> Seq.map (fun (p,o) ->
-        match ConnState.tryFindTopicPartitionBroker (topic,p) clusterState with
-        | Some ch -> ch, (p,o)
-        | None -> failwithf "unable to find broker for topic=%s partition=%i" topic p)
-      |> Seq.groupBy fst
-      |> Seq.map (fun (ch,os) -> ch, os |> Seq.map snd |> Seq.toArray)
+      let offsets = Map.ofArray offsets
+      brokerTopology
+      |> Map.toSeq
+      |> Seq.groupBy snd
+      |> Seq.map (fun (ch,xs) -> ch, xs |> Seq.map (fun (p,_) -> p, Map.find p offsets) |> Seq.toArray)
       |> Seq.toArray
           
     Log.info "fetch_brokers_allocated|conn_id=%s group_id=%s topic=%s allocs=%s"
@@ -857,22 +863,27 @@ module Consumer =
                 do! buf |> BoundedMb.put ms })
               |> Async.Parallel
             return Choice1Of2 ()
-          | Failure _ ->
-            let fetchedOffsets = fetchedOffsets |> Seq.map (fun kvp -> kvp.Key, kvp.Value) |> Seq.toArray
-            return Choice2Of2 fetchedOffsets }))
+          | Failure () ->
+            return Choice2Of2 () }))
       |> Async.chooseAny
-      |> Async.map (Choice.fold (fun _ -> FetchProcResult.FetchProcCompleted) (FetchProcResult.FetchProcStateMetadata))
 
     return!
       Async.tryFinnallyWithAsync
-        fetchFromBrokers
+        (async { 
+          let! fetchProcResult = fetchFromBrokers
+          let fetchedOffsets = fetchedOffsets |> Seq.map (fun kvp -> kvp.Key, kvp.Value) |> Seq.toArray
+          match fetchProcResult with
+          | Choice1Of2 () -> 
+            return FetchProcResult.FetchProcCompleted fetchedOffsets
+          | Choice2Of2 () ->
+            return FetchProcResult.FetchProcStateMetadata fetchedOffsets })
         (async {
-          Log.info "fetch_process_stopping|group_id=%s generation_id=%i member_id=%s topic=%s" 
-            cfg.groupId state.state.generationId state.state.memberId topic
+//          Log.info "fetch_process_stopping|group_id=%s generation_id=%i member_id=%s topic=%s" 
+//            cfg.groupId state.state.generationId state.state.memberId topic
           return () })
         (fun ex -> async {
-          Log.error "fetch_process_errored|group_id=%s generation_id=%i member_id=%s topic=%s partition_count=%i error=%O" 
-            cfg.groupId state.state.generationId state.state.memberId topic (assignment.Length) ex
+          Log.error "fetch_process_errored|group_id=%s generation_id=%i member_id=%s topic=%s error=%O" 
+            cfg.groupId state.state.generationId state.state.memberId topic ex
           do! Group.leaveInternal c.groupMember state
           return raise ex }) }
 
@@ -912,7 +923,7 @@ module Consumer =
         p, AsyncSeq.replicateUntilNoneAsync tryTake)
       |> Seq.toArray
 
-    let rec startFetchProccess offsets = async {
+    let rec runFetchProccess offsets = async {
       let! offsets = async {
         match offsets with
         | None -> 
@@ -920,19 +931,21 @@ module Consumer =
           Log.info "fetched_initial_offsets|conn_id=%s group_id=%s member_id=%s topic=%s offsets=%s" 
             c.conn.Config.connId cfg.groupId state.state.memberId topic (Printers.partitionOffsetPairs initOffsets)
           return initOffsets
-        | Some offsets -> 
+        | Some offsets ->
           return offsets }
       let! fetchProcResult = fetchProcess c state (topic,offsets) partitionBuffers
       match fetchProcResult with
-      | FetchProcResult.FetchProcCompleted -> 
-        // completed, restart would be invoked by the generation
+      | FetchProcResult.FetchProcCompleted lastFetchedOffsets ->
+        Log.info "fetch_process_completed|conn_id=%s group_id=%s member_id=%s topic=%s last_offsets=%s" 
+          c.conn.Config.connId cfg.groupId state.state.memberId topic (Printers.partitionOffsetPairs lastFetchedOffsets)
         return ()
 
       | FetchProcResult.FetchProcStateMetadata lastFetchedOffsets ->
-        // state metadata, re-discover and resume
-        return! startFetchProccess (Some lastFetchedOffsets) }
+        Log.info "fetch_process_stale_metadata|conn_id=%s group_id=%s member_id=%s topic=%s last_offsets=%s" 
+          c.conn.Config.connId cfg.groupId state.state.memberId topic (Printers.partitionOffsetPairs lastFetchedOffsets)
+        return! runFetchProccess (Some lastFetchedOffsets) }
 
-    let! _ = Async.StartChild (startFetchProccess None)
+    let! _ = Async.StartChild (runFetchProccess None)
 
     return partitionStreams }
 

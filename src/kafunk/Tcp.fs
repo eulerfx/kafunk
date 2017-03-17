@@ -366,7 +366,7 @@ type ReqRepSession<'a, 'b, 's> internal
   let receiveTask : Task<unit> = 
     Async.StartAsTask (receiveProcess, cancellationToken = cts.Token)
 
-  member internal __.Task = receiveTask
+  member internal __.Loop = receiveTask
 
   member internal __.LastActivityTicks = last
 
@@ -413,4 +413,4 @@ module Session =
 
   /// Gets the Task corresponding to the lifecycle of the session.
   /// The Task completes with error when the session fails.
-  let task (session:ReqRepSession<_, _, _>) = session.Task
+  let task (session:ReqRepSession<_, _, _>) = session.Loop

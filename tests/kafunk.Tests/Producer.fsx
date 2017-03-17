@@ -56,7 +56,8 @@ let producerCfg =
     Partitioner.roundRobin, 
     requiredAcks = RequiredAcks.AllInSync,
     timeout = ProducerConfig.DefaultTimeoutMs,
-    bufferSizeBytes = ProducerConfig.DefaultBufferSizeBytes,
+    //bufferSizeBytes = ProducerConfig.DefaultBufferSizeBytes,
+    bufferSizeBytes = Int32.MaxValue,
     batchSizeBytes = 2000000,
     batchLingerMs = 1000
     )
@@ -87,7 +88,7 @@ let go = async {
         (offsets.ToArray())
         |> Seq.map (fun kvp -> kvp.Key, kvp.Value)
         |> Seq.sortBy fst
-        |> Seq.map (fun (p,o) -> sprintf "[p=%i o=%i]" p o)        
+        |> Seq.map (fun (p,o) -> sprintf "[p=%i o=%i]" p o)
         |> String.concat " ; "
       Log.info "completed=%i elapsed_sec=%f MB=%i offsets=[%s]" completed sw.Elapsed.TotalSeconds mb offsets }
 

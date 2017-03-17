@@ -22,6 +22,14 @@ type Compile = CompilationRepresentationAttribute
 /// CompilationRepresentationFlags.ModuleSuffix
 let [<Literal>] Module = CompilationRepresentationFlags.ModuleSuffix
 
+/// Gets the current number of ticks in the timer mechanism (Stopwatch.GetTimestamp).
+let inline now () = Diagnostics.Stopwatch.GetTimestamp ()
+
+let private rng = new Random()
+let rand () = lock rng (fun () -> rng.Next())
+let randMax max = lock rng (fun () -> rng.Next max)
+let randRange min max = lock rng (fun () -> rng.Next(min, max))
+
 
 /// Operations on IDisposable.
 module Disposable =
@@ -569,28 +577,29 @@ module Observable =
       let batchSubs = batches.Subscribe(observer.OnNext)
 
       fun () -> sourceSubs.Dispose() ; batchSubs.Dispose() ; batchQueue.Dispose())
+
+  let private takeAny (queue:BlockingCollection<'a>) =
+    let batch = new ResizeArray<_>()
+    let mutable item : 'a = Unchecked.defaultof<'a>
+    while (queue.TryTake(&item)) do 
+      batch.Add(item)
+    batch.ToArray()
   
   let bufferByTimeAndCondition (timeSpan:TimeSpan) (cond:IBoundedMbCond<'a>) (source:IObservable<'a>) =
-
-    let takeAny (queue:BlockingCollection<'a>) =
-      let batch = new ResizeArray<_>()
-      let mutable item : 'a = Unchecked.defaultof<'a>
-      while (queue.TryTake(&item)) do 
-        batch.Add(item)
-      batch.ToArray()
-
     create (fun (observer:IObserver<'a[]>) ->
-
       let batchQueue = new BlockingCollection<'a>()
       let batchEvent = new Event<unit>()
-
+      let periodMs = int timeSpan.TotalMilliseconds
+      let randJitterMs = randRange 0 (periodMs / 10)
+      let periodMs = periodMs + randJitterMs
+      let randDueTimeMs = randRange 0 (periodMs * 3)
+      let timer = new Timer((fun _ -> batchEvent.Trigger()), null, randDueTimeMs, periodMs)
       let batches =
-        Observable.merge (interval timeSpan) batchEvent.Publish
+        batchEvent.Publish
         |> Observable.choose (fun () ->
           let batch = takeAny batchQueue
           if batch.Length > 0 then Some batch
           else None)
-
       let sourceSubs =
         source.Subscribe <| { new IObserver<_> with
           member __.OnNext(a) =
@@ -598,15 +607,14 @@ module Observable =
             cond.Add a
             if cond.Satisfied then
               cond.Reset ()
+              timer.Change (periodMs, periodMs) |> ignore
               batchEvent.Trigger()
           member __.OnError(e) = 
             observer.OnError(e)
           member __.OnCompleted() = 
             observer.OnCompleted() }
-
       let batchSubs = batches.Subscribe(observer.OnNext)
-
-      fun () -> sourceSubs.Dispose() ; batchSubs.Dispose() ; batchQueue.Dispose())
+      fun () ->  sourceSubs.Dispose() ; batchSubs.Dispose() ; timer.Dispose() ; batchQueue.Dispose())
 
   /// Union type that represents different messages that can be sent to the
   /// IObserver interface. The IObserver type is equivalent to a type that has
