@@ -311,10 +311,10 @@ type ReqRepSession<'a, 'b, 's> internal
   let cts = new CancellationTokenSource()
   let mutable last = Diagnostics.Stopwatch.GetTimestamp ()
 
-  let heartbeat () = Interlocked.Exchange (&last, (Diagnostics.Stopwatch.GetTimestamp ())) |> ignore
+  let hb () = Interlocked.Exchange (&last, (Diagnostics.Stopwatch.GetTimestamp ())) |> ignore
 
   let demux (data:Binary.Segment) =
-    heartbeat ()
+    hb ()
     let sessionData = SessionMessage.decode (data)
     let correlationId = sessionData.tx_id
     let mutable token = Unchecked.defaultof<_>
@@ -332,7 +332,7 @@ type ReqRepSession<'a, 'b, 's> internal
       Log.trace "received_orphaned_response|correlation_id=%i in_flight_requests=%i" correlationId txs.Count
 
   let mux (ct:CancellationToken) (req:'a) =
-    heartbeat ()
+    hb ()
     let startTime = DateTime.UtcNow
     let correlationId = correlationId ()
     let rep = TaskCompletionSource<_>()

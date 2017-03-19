@@ -115,7 +115,7 @@ type internal Chan = private {
 
   /// A task representing the server loop for this channel.
   /// Completion of the task indicates that the channel is closed, successfully or in error.
-  serverLoop : Task<unit>
+  proc : Task<unit>
 
 }
   with 
@@ -140,7 +140,7 @@ module internal Chan =
   /// Gets the endpoint.
   let endpoint (ch:Chan) = ch.ep
 
-  let internal task (ch:Chan) = ch.serverLoop
+  let internal task (ch:Chan) = ch.proc
 
   /// Creates a fault-tolerant channel to the specified endpoint.
   /// Recoverable failures are retried, otherwise escalated.
@@ -268,4 +268,4 @@ module internal Chan =
       |> Faults.AsyncFunc.retryResultList config.requestRetryPolicy
       |> AsyncFunc.mapOut (snd >> Result.mapError (List.map (Choice.fold (konst ChanTimeout) (ChanFailure))))
 
-    return  { ep = ep ; send = send ; serverLoop = session.Loop } }
+    return  { ep = ep ; send = send ; proc = session.Loop } }

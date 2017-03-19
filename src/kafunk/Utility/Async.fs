@@ -86,7 +86,7 @@ module IVar =
   /// assigned the result.
   /// Returns a Task<bool> which completes when the IVar has been set, indicating
   /// whether it was set for the first time.
-  let link (iv:IVar<'a>) (t:Task<'a>) : Task<bool> =
+  let linkTask (iv:IVar<'a>) (t:Task<'a>) : Task<bool> =
     t.ContinueWith (Func<_,_>(fun (t:Task<'a>) ->
       if t.IsCanceled then tryCancel iv
       elif t.IsFaulted then tryError t.Exception iv
