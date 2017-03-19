@@ -741,7 +741,7 @@ module Consumer =
   let private fetchStream 
     (c:Consumer, state:ConsumerState)
     (ch:Chan) 
-    (topic:TopicName, offsets:(Partition * Offset)[]) : AsyncSeq<Result<ConsumerMessageSet[], _>> =
+    (topic:TopicName, offsets:(Partition * Offset)[]) : AsyncSeq<Result<ConsumerMessageSet[], Choice<_,_>>> =
     let initRetryQueue = 
       RetryQueue.create c.config.endOfTopicPollPolicy fst
     let tryFetch = tryFetch (c,state) ch
@@ -760,13 +760,11 @@ module Consumer =
                 return offsets }
           let! res = tryFetch (topic,offsets)
           match res with
-          | FetchResult.FetchError _errs ->
-            //do! Group.leaveInternal c.groupMember state
-            // TODO: retry OR close group OR throw?
-            return None
+          | FetchResult.FetchError errs ->
+            return Some (Failure (Choice1Of2 errs), ([||],retryQueue))
                     
-          | FetchResult.FetchStaleMetadata _ ->
-            return Some (Failure (), ([||],retryQueue))
+          | FetchResult.FetchStaleMetadata staleOffsets ->
+            return Some (Failure (Choice2Of2 staleOffsets), ([||],retryQueue))
           
           | FetchResult.FetchSuccess (mss,ends) ->
             let retryQueue = 
@@ -784,6 +782,7 @@ module Consumer =
 
   type private FetchProcResult =
     | FetchProcCompleted
+    | FetchProcError
     | FetchProcStateMetadata
 
   /// Discovers cluster state, then consumes per-broker fetch streams, dispatching to per-partition buffers.
@@ -842,14 +841,16 @@ module Consumer =
               |> Async.Parallel
               |> Async.Ignore
             return Choice1Of2 ()
-          | Failure () ->
-            return Choice2Of2 () }))
+          | Failure err ->
+            return Choice2Of2 err }))
       |> Async.chooseAny
 
     match fetchProcResult with
     | Choice1Of2 () -> 
       return FetchProcResult.FetchProcCompleted
-    | Choice2Of2 () ->
+    | Choice2Of2 (Choice1Of2 _) ->
+      return FetchProcResult.FetchProcError
+    | Choice2Of2 (Choice2Of2 _) ->
       return FetchProcResult.FetchProcStateMetadata }
 
   /// Initiates consumption of a single generation of the consumer group protocol.
@@ -899,7 +900,7 @@ module Consumer =
           c.conn.Config.connId cfg.groupId consumerState.memberId topic
         return ()
 
-      | FetchProcResult.FetchProcStateMetadata ->
+      | FetchProcResult.FetchProcStateMetadata | FetchProcResult.FetchProcError ->
         Log.info "fetch_process_stale_metadata|conn_id=%s group_id=%s member_id=%s topic=%s" 
           c.conn.Config.connId cfg.groupId consumerState.memberId topic
         // TODO: flush pending offsets?
