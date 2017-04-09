@@ -1,5 +1,5 @@
 [<AutoOpen>]
-module internal Kafunk.AsyncSeq
+module Kafunk.AsyncSeq
 
 open FSharp.Control
 open System
@@ -130,7 +130,7 @@ module AsyncSeq =
   /// Applies the function to each element of the sequence.
   /// On Choice1Of2, continues traversing the sequence, collecting the results using Monoid<'b>.
   /// On Choice2Of2, short-circuits traversal, returning Choice2Of2.
-  let traverseAsyncChoiceMonoid
+  let internal traverseAsyncChoiceMonoid
     (m:Monoid<'b>)
     (f:'a -> Async<Choice<'b, 'e>>) 
     (s:AsyncSeq<'a>) : Async<Choice<'b, 'e>> = async {
@@ -151,7 +151,7 @@ module AsyncSeq =
 
   /// A traversal of an async sequence specialized to the Result type.
   /// Returns the first successful result or a list of all erroneous results.
-  let traverseAsyncResult
+  let internal traverseAsyncResult
     (m:Monoid<'e>)
     (f:'a -> Async<Result<'b, 'e>>) 
     (s:AsyncSeq<'a>) : Async<Result<'b, 'e>> = async {
@@ -173,7 +173,7 @@ module AsyncSeq =
   let traverseAsyncResultList (f:'a -> Async<Result<'b, 'e>>) (s:AsyncSeq<'a>) : Async<Result<'b, 'e list>> =
     traverseAsyncResult Monoid.freeList (f >> Async.map (Result.mapError List.singleton)) s
     
-  let traverseResult (m:Monoid<'e>) (f:'a -> Result<'b, 'e>) (s:AsyncSeq<'a>) : Async<Result<'b, 'e>> =
+  let internal traverseResult (m:Monoid<'e>) (f:'a -> Result<'b, 'e>) (s:AsyncSeq<'a>) : Async<Result<'b, 'e>> =
     traverseAsyncResult m (f >> async.Return) s
 
   let traverseResultList (f:'a -> Result<'b, 'e>) (s:AsyncSeq<'a>) : Async<Result<'b, 'e list>> =
@@ -228,7 +228,7 @@ module AsyncSeq =
       |> AsyncSeq.iterAsync id }
 
   // TODO: refactor to a more generic condition
-  let bufferByConditionAndTime (cond:IBoundedMbCond<'T>) (timeoutMs:int) (source:AsyncSeq<'T>) : AsyncSeq<'T[]> = 
+  let internal bufferByConditionAndTime (cond:IBoundedMbCond<'T>) (timeoutMs:int) (source:AsyncSeq<'T>) : AsyncSeq<'T[]> = 
     if (timeoutMs < 1) then invalidArg "timeoutMs" "must be positive"
     asyncSeq {
       let buffer = new ResizeArray<_>()
