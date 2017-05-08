@@ -516,54 +516,26 @@ module Producer =
       ProducerMessageBatch(p,ms,rep,messageBatchSizeBytes ms)
     return! sendBatch p state batch }
 
-//  let private produceInternal (p:Producer) (state:ProducerState) (m:ProducerMessage) : Async<ProducerResult> =
-//    let pt = state.partition m
-//    let rep = IVar.create ()
-//    let batch = ProducerMessageBatch(pt,[|m|],rep,ProducerMessage.size m)
-//    Resource.injectWithRecovery p.state p.conn.Config.requestRetryPolicy (sendBatch p) batch
-
-  let private produceBatchedInternal (p:Producer) (state:ProducerState) (batch:ProducerMessage seq) : Async<Result<ProducerResult[], ResourceErrorAction<ProducerResult[], exn>>> =
-    batch
-    |> Seq.groupBy state.partition
-    |> Seq.map (fun (pt,ms) ->
-      let rep = IVar.create ()
-      let ms = ms |> Seq.toArray
-      let batch = ProducerMessageBatch(pt,ms,rep,messageBatchSizeBytes ms)
-      Resource.injectWithRecovery p.state p.conn.Config.requestRetryPolicy (sendBatch p) batch)
-    |> Async.Parallel
-    |> Async.map Success
-
-  /// Creates a producer.
-  let createAsync (conn:KafkaConn) (config:ProducerConfig) : Async<Producer> = async {
-    Log.info "initializing_producer|topic=%s" config.topic
-    let batchTimeout = 
-      let tcpReqTimeout = conn.Config.tcpConfig.requestTimeout
-      let prodReqTimeout = TimeSpan.FromMilliseconds config.timeout
-      let batchLinger = TimeSpan.FromMilliseconds config.batchLingerMs
-      let slack = TimeSpan.FromMilliseconds 5000 // TODO: configurable?
-      [ (tcpReqTimeout + batchLinger + slack) ; (prodReqTimeout + batchLinger + slack) ] |> List.max
-    let! resource = 
-      Resource.recoverableRecreate 
-        (initProducer conn config) 
-        (fun (s,v,_,ex) -> async {
-          Log.warn "closing_producer|version=%i topic=%s partitions=[%s] error=\"%O\"" 
-            v config.topic (Printers.partitions s.routes.partitions) ex
-          return () })
-    let! state = Resource.get resource
-    let p = { state = resource ; config = config ; conn = conn ; batchTimeout = batchTimeout }
-    Log.info "producer_initialized|topic=%s partitions=[%s]" config.topic (Printers.partitions state.routes.partitions)
-    return p }
-
-  /// Creates a producer.
-  let create (conn:KafkaConn) (cfg:ProducerConfig) : Producer =
-    createAsync conn cfg |> Async.RunSynchronously
-
   /// Produces a batch of messages using the specified function which creates messages given a set of partitions
   /// currently configured for the topic.
   /// The messages will be sent as part of a batch and the result will correspond to the offset
   /// produced by the entire batch.
   let produceBatch (p:Producer) (createBatch:PartitionCount -> Partition * ProducerMessage[]) =
     Resource.injectWithRecovery p.state p.conn.Config.requestRetryPolicy (produceBatchInternal p) createBatch
+
+  let private produceBatchedInternal (p:Producer) (state:ProducerState) (batch:ProducerMessage seq) : Async<Result<ProducerResult[], ResourceErrorAction<ProducerResult[], exn>>> =
+    batch
+    |> Seq.groupBy state.partition
+    |> Seq.map (fun (pt,ms) -> async {
+      let rep = IVar.create ()
+      let ms = ms |> Seq.toArray
+      let batch = ProducerMessageBatch(pt,ms,rep,messageBatchSizeBytes ms)
+      return! sendBatch p state batch })
+    |> Async.Parallel
+    |> Async.map (fun xs ->
+      let oks,errs = xs |> Seq.partitionChoices
+      if errs.Length = 0 then Success oks
+      else failwith "")
 
   /// Produces a batch of messages, by assigning a partition to each message, grouping messages by partitions
   /// and sending batches by partition in parallel and collecting the results.
@@ -574,10 +546,37 @@ module Producer =
   /// The message will be sent as part of a batch and the result will correspond to the offset
   /// produced by the entire batch.
   let produce (p:Producer) (m:ProducerMessage) =
-    //Resource.injectWithRecovery p.state p.conn.Config.requestRetryPolicy (produceInternal p) m
     produceBatch p (fun ps -> Partitioner.partition p.config.partitioner p.config.topic ps m, [|m|])
 
   /// Gets the configuration for the producer.
   let configuration (p:Producer) = 
     p.config
       
+  /// Creates a producer.
+  let createAsync (conn:KafkaConn) (config:ProducerConfig) : Async<Producer> = async {
+    Log.info "initializing_producer|topic=%s" config.topic
+    
+    let batchTimeout = 
+      let tcpReqTimeout = conn.Config.tcpConfig.requestTimeout
+      let prodReqTimeout = TimeSpan.FromMilliseconds config.timeout
+      let batchLinger = TimeSpan.FromMilliseconds config.batchLingerMs
+      let slack = TimeSpan.FromMilliseconds 5000 // TODO: configurable?
+      [ (tcpReqTimeout + batchLinger + slack) ; (prodReqTimeout + batchLinger + slack) ] |> List.max
+    
+    let! resource = 
+      Resource.recoverableRecreate 
+        (initProducer conn config) 
+        (fun (s,v,_,ex) -> async {
+          Log.warn "closing_producer|version=%i topic=%s partitions=[%s] error=\"%O\"" 
+            v config.topic (Printers.partitions s.routes.partitions) ex
+          return () })
+
+    return { 
+      state = resource
+      config = config
+      conn = conn
+      batchTimeout = batchTimeout } }
+
+  /// Creates a producer.
+  let create (conn:KafkaConn) (cfg:ProducerConfig) : Producer =
+    createAsync conn cfg |> Async.RunSynchronously
