@@ -393,7 +393,7 @@ module Consumer =
     let topic = cfg.topic
     return!
       Group.tryAsync
-        (state)
+        (state.state)
         (ignore)
         (async {
           let req = 
@@ -543,15 +543,7 @@ module Consumer =
 
   let private consumerStateFromGroupMemberState (state:GroupMemberState) = 
     let _,assignments = ConsumerGroup.decodeMemberAssignment state.memberAssignment
-    { ConsumerState.assignments = assignments
-      //memberId = state.memberId
-      //leaderId = state.leaderId
-      //members = state.members
-      //generationId = state.generationId
-      //assignmentStrategy = state.protocolName
-      //closed = state.closed
-      //protocolName = state.protocolName
-      groupMember = state }
+    { ConsumerState.assignments = assignments ; groupMember = state }
 
   /// Returns the current consumer state.
   let state (c:Consumer) : Async<ConsumerState> = async {
@@ -571,15 +563,13 @@ module Consumer =
   /// Returns a set of message sets and an end of topic list.
   /// Returns None if the generation closed.
   let rec private tryFetch 
-    (c:Consumer) 
-    (state:GroupMemberStateWrapper) 
+    (c:Consumer, state:GroupMemberStateWrapper)
     (offsets:(Partition * Offset)[]) : Async<(ConsumerMessageSet[] * (Partition * HighwaterMarkOffset)[]) option> = 
     let cfg = c.config
     let topic = cfg.topic
     let fetch = Kafka.fetch c.conn |> AsyncFunc.catch
-    let messageVer = Versions.fetchResMessage (Versions.byKey c.conn.Config.version ApiKey.Fetch)
     Group.tryAsync
-      (state)
+      (state.state)
       (fun _ -> None)
       (async {
         let req = 
@@ -598,14 +588,13 @@ module Consumer =
                 | ErrorCode.NoError ->
                   if mss = 0 then Choice2Of4 (p,hwmo)
                   else 
-                    let ms = Compression.decompress messageVer ms
+                    let ms = Compression.decompress c.messageVersion ms
                     if cfg.checkCrc then
-                      MessageSet.CheckCrc (messageVer, ms)
+                      MessageSet.CheckCrc (c.messageVersion, ms)
                     Choice1Of4 (ConsumerMessageSet(t, p, ms, hwmo))
                 | ErrorCode.OffsetOutOfRange -> 
                   Choice3Of4 (p,hwmo)
-                | ErrorCode.NotLeaderForPartition | ErrorCode.UnknownTopicOrPartition | ErrorCode.ReplicaNotAvailable ->
-                      
+                | ErrorCode.NotLeaderForPartition | ErrorCode.UnknownTopicOrPartition | ErrorCode.ReplicaNotAvailable ->                      
                   Choice4Of4 (p)
                 | _ -> 
                   failwithf "unsupported fetch error_code=%i" ec))
@@ -622,7 +611,7 @@ module Consumer =
             Log.warn "fetch_response_indicated_stale_metadata|stale_offsets=%s" (Printers.partitionOffsetPairs staleOffsets)
             let! _ = c.conn.GetMetadataState ([|topic|])
             // TODO: only fetch stale and combine
-            return! tryFetch c state offsets else
+            return! tryFetch (c,state) offsets else
               
           if outOfRange.Length > 0 then
             let outOfRange = 
@@ -673,7 +662,7 @@ module Consumer =
       let missingOffsets = resolvedOffsets |> Array.filter (fun (_,o) -> o = -1L)
       if missingOffsets.Length = 0 then
         Log.info "resuming_fetch_from_committed_offsets|topic=%s committed_offsets=%s" cfg.topic (Printers.partitionOffsetPairs resolvedOffsets)
-        return! tryFetch c state committedOffsets
+        return! tryFetch (c,state) committedOffsets
       else
         Log.warn "stopping_consumer|topic=%s committed_offsets=%s" cfg.topic (Printers.partitionOffsetPairs resolvedOffsets)
         do! Group.leaveInternal c.groupMember state
@@ -694,10 +683,12 @@ module Consumer =
               a)
         |> Map.toArray
       Log.info "resuming_fetch_from_reset_offsets|topic=%s reset_offsets=%s" topic (Printers.partitionOffsetPairs resetOffsets)
-      return! tryFetch c state resetOffsets }
+      return! tryFetch (c,state) resetOffsets }
 
   /// multiplexed stream of all fetch responses for this consumer
-  let private fetchStream (c:Consumer) state (initOffsets:(Partition * Offset)[]) : AsyncSeq<ConsumerMessageSet[]> =
+  let private fetchStream 
+    (c:Consumer, state:GroupMemberStateWrapper)
+    (initOffsets:(Partition * Offset)[]) : AsyncSeq<ConsumerMessageSet[]> =
     let cfg = c.config
     let topic = cfg.topic
     let initRetryQueue = RetryQueue.create cfg.endOfTopicPollPolicy fst
@@ -714,7 +705,7 @@ module Consumer =
                 return Array.append offsets dueRetries
               else 
                 return offsets }
-          let! res = tryFetch c state offsets
+          let! res = tryFetch (c,state) offsets
           match res with
           | None ->
             return None
@@ -741,7 +732,10 @@ module Consumer =
             return Some (mss, (nextOffsets,retryQueue)) })
 
   /// consumes fetchStream and dispatches to per-partition buffers
-  let private fetchProcess (c:Consumer) state initOffsets partitionBuffers = async {
+  let private fetchProcess 
+    (c:Consumer, state:GroupMemberStateWrapper) 
+    (initOffsets:(Partition * Offset)[]) 
+    (partitionBuffers:Map<Partition, BoundedMb<ConsumerMessageSet>>) : Async<unit> = async {
     let assignment = Array.map fst initOffsets
     let cfg = c.config
     let topic = cfg.topic
@@ -754,7 +748,7 @@ module Consumer =
       Async.tryFinnallyWithAsync
         (async {
           do!
-            fetchStream c state initOffsets
+            fetchStream (c,state) initOffsets
             |> AsyncSeq.iterAsync (fun mss -> async {
               let! _ =
                 mss
@@ -774,7 +768,7 @@ module Consumer =
             return raise ex }) }
 
   /// Initiates consumption of a single generation of the consumer group protocol.
-  let private consumeGeneration (c:Consumer) (state:GroupMemberStateWrapper) = async {
+  let private consumeGeneration (c:Consumer, state:GroupMemberStateWrapper) = async {
       
     let cfg = c.config
 
@@ -800,7 +794,7 @@ module Consumer =
     Log.info "fetched_initial_offsets|conn_id=%s group_id=%s member_id=%s topic=%s offsets=%s" 
       c.conn.Config.connId cfg.groupId state.state.memberId topic (Printers.partitionOffsetPairs initOffsets)
                                                
-    Async.Start (fetchProcess c state initOffsets partitionBuffers, fetchProcessCancellation.Token)
+    Async.Start (fetchProcess (c,state) initOffsets partitionBuffers, fetchProcessCancellation.Token)
         
     let partitionStreams =
       partitionBuffers
@@ -818,9 +812,9 @@ module Consumer =
   /// is paired with the set of assigned fetch streams.
   let generations (c:Consumer) =
     Group.generationsInternal c.groupMember
-    |> AsyncSeq.mapAsyncParallel (fun state -> async {
-      let! partitionStreams = consumeGeneration c state
+    |> AsyncSeq.mapAsyncParallel (fun state -> async {      
       let consumerState = consumerStateFromGroupMemberState state.state
+      let! partitionStreams = consumeGeneration (c,state)
       return consumerState,partitionStreams })
 
   /// Returns a stream of message sets across all partitions assigned to the consumer.

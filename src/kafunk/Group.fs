@@ -1,9 +1,7 @@
 ﻿namespace Kafunk
 
 open FSharp.Control
-open System
 open System.Threading
-open System.Threading.Tasks
 open Kafunk
 
 /// Internal state corresponding to a single generation of the group protocol.
@@ -103,32 +101,32 @@ module Group =
   /// Checks if the group state is closed, in which cases it evaluates f.
   /// Otherwise, evaluates the async computation.
   /// NB: this does not handle scenarios when the group state is closed shortly after the async computation is invoked.
-  let internal tryAsync (state:GroupMemberStateWrapper) (f:GroupLeaveAction -> 'a) (a:Async<'a>) : Async<'a> = async {
-    let t = state.closed.Task
-    if t.IsCompleted then return f t.Result
+  let internal tryAsync (state:GroupMemberState) (f:unit -> 'a) (a:Async<'a>) : Async<'a> = async {
+    let t = state.closed
+    if t.IsCancellationRequested then return f ()
     else return! a }
     
   /// Closes a group specifying whether a new generation should begin.
-  let private leaveGroup (gm:GroupMember) (state:GroupMemberStateWrapper) (action:GroupLeaveAction) : Async<bool> =
+  let private leaveGroup (gm:GroupMember) (state:GroupMemberStateWrapper) (action:GroupLeaveAction) : Async<unit> =
     tryAsync
-      state
-      (fun _ -> false)
+      state.state
+      (ignore)
       (async {
         match action with
         | GroupLeaveAction.LeaveAndRejoin ec ->
           if IVar.tryPut action state.closed then
             Log.warn "leaving_group_to_rejoin|conn_id=%s group_id=%s generation_id=%i member_id=%s leader_id=%s error_code=%i"
               gm.conn.Config.connId gm.config.groupId state.state.generationId state.state.memberId state.state.leaderId ec
-            return true
+            return ()
           else
-            return false
+            return ()
         | GroupLeaveAction.LeaveGroup ->
           if IVar.tryPut action state.closed then
             Log.warn "leaving_group|conn_id=%s group_id=%s generation_id=%i member_id=%s leader_id=%s" 
               gm.conn.Config.connId gm.config.groupId state.state.generationId state.state.memberId state.state.leaderId
-            return true
+            return ()
           else
-            return false
+            return ()
         })
 
   /// Closes a generation and causes a new generation to begin.
@@ -249,8 +247,8 @@ module Group =
       /// Sends a heartbeat.
       let heartbeat (count:int) (state:GroupMemberStateWrapper) =
         tryAsync
-          state
-          (konst false)
+          state.state
+          (fun _ -> false)
           (async {
             Log.trace "sending_heartbeat|conn_id=%s group_id=%s generation=%i member_id=%s n=%i"
               conn.Config.connId cfg.groupId state.state.generationId state.state.memberId count
