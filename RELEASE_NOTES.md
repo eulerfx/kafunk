@@ -1,3 +1,9 @@
+### 0.1.2-alpha
+
+* BREAKING: Refer to GroupMemberState from ConsumerState and remove members
+
+
+
 ### 0.1.1-alpha - 25.05.2017
 
 * Snappy compression.

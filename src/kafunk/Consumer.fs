@@ -303,38 +303,24 @@ and AutoOffsetReset =
 /// State corresponding to a single generation of the consumer group protocol.
 type ConsumerState = {
   
-  /// The consumer group generation.
-  generationId : GenerationId
-
-  /// The consumer's member id.
-  memberId : MemberId
-
-  /// The leader of the generation.
-  leaderId : LeaderId
-
-  /// The members of the consumer group.
-  /// Available only to the leader.
-  members : (MemberId * ProtocolMetadata)[]
-
-  /// The assignment strategy selected by the group coordinator.
-  assignmentStrategy : AssignmentStrategyName
-
-  /// The selected protocol.
-  protocolName : ProtocolName
+  /// The state corresponding to the consumer's group member instance.
+  groupMember : GroupMemberState
 
   /// The partitions assigned to this consumer.
   assignments : Partition[]
 
-  /// Cancelled when the generation is closed.
-  closed : CancellationToken
-
 }
 
 /// A consumer.
-type Consumer = private {
+type Consumer = private {  
   conn : KafkaConn
   config : ConsumerConfig
+  
+  /// The group protocol member instance.  
   groupMember : GroupMember
+  
+  /// The version of the message in the fetch response.
+  messageVersion : int16  
 }
 
 /// A set of messages for a consumer from an individual topic-partition.
@@ -547,7 +533,8 @@ module Consumer =
         rebalanceTimeout = cfg.rebalanceTimeout
         protocol = groupProtocol }
     let! gm = Group.createJoin conn config
-    let consumer = { conn = conn ; config = cfg ; groupMember = gm }
+    let messageVer = Versions.fetchResMessage (Versions.byKey conn.Config.version ApiKey.Fetch)
+    let consumer = { conn = conn ; config = cfg ; groupMember = gm ; messageVersion = messageVer }
     return consumer }
 
   /// Creates a consumer.
@@ -557,13 +544,14 @@ module Consumer =
   let private consumerStateFromGroupMemberState (state:GroupMemberState) = 
     let _,assignments = ConsumerGroup.decodeMemberAssignment state.memberAssignment
     { ConsumerState.assignments = assignments
-      memberId = state.memberId
-      leaderId = state.leaderId
-      members = state.members
-      generationId = state.generationId
-      assignmentStrategy = state.protocolName
-      closed = state.closed
-      protocolName = state.protocolName }
+      //memberId = state.memberId
+      //leaderId = state.leaderId
+      //members = state.members
+      //generationId = state.generationId
+      //assignmentStrategy = state.protocolName
+      //closed = state.closed
+      //protocolName = state.protocolName
+      groupMember = state }
 
   /// Returns the current consumer state.
   let state (c:Consumer) : Async<ConsumerState> = async {
@@ -709,7 +697,7 @@ module Consumer =
       return! tryFetch c state resetOffsets }
 
   /// multiplexed stream of all fetch responses for this consumer
-  let private fetchStream (c:Consumer) state initOffsets =
+  let private fetchStream (c:Consumer) state (initOffsets:(Partition * Offset)[]) : AsyncSeq<ConsumerMessageSet[]> =
     let cfg = c.config
     let topic = cfg.topic
     let initRetryQueue = RetryQueue.create cfg.endOfTopicPollPolicy fst
@@ -852,7 +840,7 @@ module Consumer =
         |> Seq.map (fun (_,stream) -> stream |> AsyncSeq.iterAsync (handler consumerState))
         |> Async.Parallel
         |> Async.Ignore
-        |> Async.cancelTokenWith consumerState.closed id)
+        |> Async.cancelTokenWith consumerState.groupMember.closed id)
 
   /// Starts consumption using the specified handler.
   /// The handler will be invoked in parallel across topic/partitions, but sequentially within a topic/partition.
