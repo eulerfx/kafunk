@@ -39,6 +39,23 @@ Projector
 
 *)
 
+(*
+
+# Graph
+  
+  C1 ----*
+ /        \
+P          \ 
+ \          \
+  C2 --------*
+
+- P - parent computation (parent node)
+- C1,C2 - child computations started by P (linked child nodes)
+- * - failure
+
+*)
+
+
 /// A node defines a starting point for async computations.
 /// Computations started from a node are bidirectionally linked to the node
 /// such that if the computation fails, the node is failed, which in turn,
@@ -56,6 +73,21 @@ module Node =
     let cts = new CancellationTokenSource()
     iv.Task |> Task.extend (fun _ -> cts.Cancel ()) |> ignore
     { node = iv ; cancellation = cts.Token }
+
+  /// Marks the node as completed with fault.
+  let error (n:Node) (e:exn) =
+    IVar.tryError e n.node |> ignore
+
+  let isComplete (n:Node) =
+    n.node.Task.IsCompleted
+
+  /// Marks the node as completed without fault.
+  let complete (n:Node) =
+    IVar.tryPut () n.node |> ignore
+
+  /// Returns an async computation which completes when the node completes.
+  let join (n:Node) : Async<unit> =
+    IVar.get n.node
 
   /// Starts an async computation as a node.
   /// The node completes when the async computation completes.
@@ -86,21 +118,6 @@ module Node =
   /// Returns a Task that faults only if the node errors.
   let errorTask (n:Node) : Task<'a> =
     Task.taskFault n.node.Task
-
-  /// Marks the node as completed with fault.
-  let error (n:Node) (e:exn) =
-    IVar.tryError e n.node |> ignore
-
-  let isComplete (n:Node) =
-    n.node.Task.IsCompleted
-
-  /// Marks the node as completed without fault.
-  let complete (n:Node) =
-    IVar.tryPut () n.node |> ignore
-
-  /// Returns an async computation which completes when the node completes.
-  let join (n:Node) : Async<unit> =
-    IVar.get n.node
 
   let private linkTaskError (n:Node) (t:Task<_>) =
     t 
@@ -206,7 +223,29 @@ let go (a:Async<'a>) = proc {
     
 
 
+(*
 
+
+
+type Resource<'s> = {
+  state : SVar<'s>
+}
+
+
+val op : R<'s> -> ('s -> 'a -> Async<'b>) -> ('a -> Async<'b>)
+
+
+
+type NodeState<'a> = {
+  node : Node
+  state : 'a
+  version : int
+}
+
+
+
+
+*)
 
 
 
