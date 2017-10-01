@@ -4,15 +4,15 @@ module internal Kafunk.MVar
 // TODO: https://github.com/fsprojects/FSharpx.Async
 
 open System
-open System.Threading
-open System.Threading.Tasks
 
 type private MVarReq<'a> =
   | PutAsync of Async<'a> * IVar<'a>
   | UpdateAsync of update:('a -> Async<'a>)
   | PutOrUpdateAsync of update:('a option -> Async<'a>) * IVar<'a>
   | Get of IVar<'a>
+  | TryGet of IVar<'a option>
   | Take of IVar<'a>
+  | TryTake of IVar<'a option>
 
 /// A serialized variable.
 type MVar<'a> internal (?a:'a) =
@@ -44,6 +44,10 @@ type MVar<'a> internal (?a:'a) =
               state <- None
               IVar.error ex rep
               return! init () })
+        | TryTake rep | TryGet rep -> 
+          Some (async {
+            IVar.put None rep
+            return! init () })
         | _ ->
           None) }
     and loop (a:'a) = async {
@@ -72,9 +76,16 @@ type MVar<'a> internal (?a:'a) =
       | Get rep ->
         IVar.put a rep
         return! loop (a)
+      | TryGet rep ->
+        IVar.put (Some a) rep
+        return! loop (a)
       | Take (rep) ->
         state <- None
         IVar.put a rep
+        return! init ()
+      | TryTake (rep) ->
+        state <- None
+        IVar.put (Some a) rep
         return! init ()
       | UpdateAsync f ->
         let! a = f a
@@ -96,8 +107,14 @@ type MVar<'a> internal (?a:'a) =
   member __.Get () : Async<'a> =
     postAndAsyncReply (Get)
 
+  member __.TryGet () : Async<'a option> =
+    postAndAsyncReply (TryGet)
+
   member __.Take () : Async<'a> =
     postAndAsyncReply (fun tcs -> Take(tcs))
+
+  member __.TryTake () : Async<'a option> =
+    postAndAsyncReply (fun tcs -> TryTake(tcs))
 
   member __.GetFast () : 'a option =
     state
@@ -150,9 +167,17 @@ module MVar =
   let get (c:MVar<'a>) : Async<'a> =
     async.Delay (c.Get)
 
+  /// Gets the value of the MVar.
+  let tryGet (c:MVar<'a>) : Async<'a option> =
+    async.Delay (c.TryGet)
+
   /// Takes an item from the MVar.
   let take (c:MVar<'a>) : Async<'a> =
     async.Delay (c.Take)
+
+  /// Takes an item from the MVar.
+  let tryTake (c:MVar<'a>) : Async<'a option> =
+    async.Delay (c.TryTake)
   
   /// Returns the last known value, if any, without serialization.
   /// NB: unsafe because the value may be null, but helpful for supporting overlapping

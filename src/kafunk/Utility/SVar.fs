@@ -27,6 +27,12 @@ module SVar =
   let create () : SVar<'a> = 
     { state = MVar.create () ; tail = ref (createNode ()) }
 
+  /// Creates a stream variable assigned with the specified.value.
+  let createFull (a:'a) : SVar<'a> = 
+    let s = { state = MVar.createFull a ; tail = ref (createNode ()) }
+    putNode s a
+    s
+
   /// Puts a new value into the stream variable.
   let put (a:'a) (s:SVar<'a>) : Async<unit> = async {
     let! a = MVar.put a s.state

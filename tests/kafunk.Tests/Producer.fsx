@@ -8,10 +8,8 @@ open System.Diagnostics
 open System.Threading
 open Refs
 
-Log.MinLevel <- LogLevel.Trace
+//Log.MinLevel <- LogLevel.Trace
 let Log = Log.create __SOURCE_FILE__
-
-
 
 
 let host = argiDefault 1 "localhost"
@@ -50,8 +48,8 @@ let connCfg =
       )
 
   KafkaConfig.create (
-    [KafkaUri.parse host], 
-    //[KafkaUri.parse "localhost:9092" ; KafkaUri.parse "localhost:9093" ; KafkaUri.parse "localhost:9094"], 
+    //[KafkaUri.parse host], 
+    [KafkaUri.parse "localhost:9092" ; KafkaUri.parse "localhost:9093" ; KafkaUri.parse "localhost:9094"], 
     tcpConfig = chanConfig,
     requestRetryPolicy = KafkaConfig.DefaultRequestRetryPolicy,
     //requestRetryPolicy = RetryPolicy.constantBoundedMs 1000 10,
@@ -161,6 +159,8 @@ let go = async {
       Seq.init batchCount id
       |> Seq.map (fun batchNo -> async {
         try
+          printfn "Enter to produce..."
+          Console.Read () |> ignore
           let msgs = Array.init batchSize (fun i -> ProducerMessage.ofBytes payload)
           //let! res = produce msgs
           let! res =

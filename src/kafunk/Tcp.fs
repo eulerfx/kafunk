@@ -360,11 +360,12 @@ type ReqRepSession<'a, 'b, 's> internal
 
   let rec receiveProcess = async {
     try
-      Log.info "starting_receive_loop|remote_endpoint=%O" remoteEndpoint
+      //Log.info "starting_receive_loop|remote_endpoint=%O" remoteEndpoint
       do! receive |> AsyncSeq.iter demux
-      Log.warn "restarting_receive_loop|remote_endpoint=%O" remoteEndpoint
+      //Log.warn "restarting_receive_loop|remote_endpoint=%O" remoteEndpoint
       //do! Async.SwitchToThreadPool ()
-      return! receiveProcess
+      //return! receiveProcess
+      return ()
     with ex ->
       Log.error "receive_loop_faiure|remote_endpoint=%O error=\"%O\"" remoteEndpoint ex
       return raise ex }
@@ -375,16 +376,15 @@ type ReqRepSession<'a, 'b, 's> internal
   member internal __.Task = receiveTask
 
   member internal __.Send (req:'a) = async {
-    if receiveTask.IsFaulted then return raise receiveTask.Exception else
     let! ct = Async.CancellationToken
     let _correlationId,sessionData,rep = mux ct req
-    //Log.trace "sending_request|correlation_id=%i bytes=%i" correlationId sessionData.Count
     let! _sent = send sessionData
-    //Log.trace "request_sent|correlation_id=%i bytes=%i" correlationId sent
-    return! rep.Task |> Async.awaitTaskCancellationAsError }
+    return! 
+      Task.chooseChoice rep.Task receiveTask
+      |> Async.awaitTaskCancellationAsError }          
 
   interface IDisposable with
-    member x.Dispose() = cts.Dispose()
+    member __.Dispose() = cts.Dispose()
 
 
 /// Operations on network sessions (layer 5).

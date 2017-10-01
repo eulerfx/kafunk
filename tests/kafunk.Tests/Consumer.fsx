@@ -16,6 +16,7 @@ let group = argiDefault 3 "existential-group"
 let count = argiDefault 4 "1" |> Int32.Parse
 
 let go = async {
+  
   let! conn = 
     let connConfig = 
       let chanConfig = 
@@ -33,6 +34,7 @@ let go = async {
         version = Versions.V_0_9_0,
         autoApiVersions = false)
     Kafka.connAsync connConfig
+  
   let consumerConfig = 
     ConsumerConfig.create (
       groupId = group, 
@@ -47,21 +49,22 @@ let go = async {
       checkCrc = true,
       endOfTopicPollPolicy = RetryPolicy.constantMs 1000
     )
+
   let! consumer = 
     Consumer.createAsync conn consumerConfig
   
-  let showProgress =
-    AsyncSeq.intervalMs 10000
-    |> AsyncSeq.iterAsync (fun _ -> async {
-      let! info = ConsumerInfo.consumerProgress consumer
-      let str = 
-        info.partitions
-        |> Seq.map (fun p -> sprintf "[p=%i o=%i hwo=%i lag=%i lead=%i eo=%i mc=%i]" p.partition p.consumerOffset p.highWatermarkOffset p.lag p.lead p.earliestOffset p.messageCount)
-        |> String.concat " ; "
-      Log.info "consumer_progress|conn_id=%s topic=%s total_lag=%i min_lead=%i partitions=%s" conn.Config.connId info.topic info.totalLag info.minLead str
-      return () })
+  //let showProgress =
+  //  AsyncSeq.intervalMs 10000
+  //  |> AsyncSeq.iterAsync (fun _ -> async {
+  //    let! info = ConsumerInfo.consumerProgress consumer
+  //    let str = 
+  //      info.partitions
+  //      |> Seq.map (fun p -> sprintf "[p=%i o=%i hwo=%i lag=%i lead=%i eo=%i mc=%i]" p.partition p.consumerOffset p.highWatermarkOffset p.lag p.lead p.earliestOffset p.messageCount)
+  //      |> String.concat " ; "
+  //    Log.info "consumer_progress|conn_id=%s topic=%s total_lag=%i min_lead=%i partitions=%s" conn.Config.connId info.topic info.totalLag info.minLead str
+  //    return () })
 
-  let! _ = Async.StartChild showProgress
+  //let! _ = Async.StartChild showProgress
 
   let handle (s:ConsumerState) (ms:ConsumerMessageSet) = async {
     use! _cnc = Async.OnCancel (fun () -> Log.warn "cancelling_handler")
@@ -83,9 +86,11 @@ let go = async {
     handle
     |> Metrics.throughputAsync2To counter (fun (_,ms,_) -> ms.messageSet.messages.Length)
 
-  do! Consumer.consumePeriodicCommit consumer (TimeSpan.FromSeconds 10.0) handle
-  //do! Consumer.consume consumer handle
-  //do! Consumer.stream consumer |> AsyncSeq.iterAsync (fun (s,ms) -> handle s ms)
+  //do! Consumer.consumePeriodicCommit consumer (TimeSpan.FromSeconds 10.0) handle
+  do! Consumer.consume consumer handle
+  //do! Consumer.stream consumer |> AsyncSeq.take 1 |> AsyncSeq.iterAsync (fun (s,ms) -> handle s ms)
+
+  //Console.Read () |> ignore
 
   Log.info "done_consuming"
 

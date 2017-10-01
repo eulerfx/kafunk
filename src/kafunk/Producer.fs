@@ -552,7 +552,7 @@ module Producer =
       let rep = IVar.create ()
       let ms = ms |> Seq.toArray
       let batch = ProducerMessageBatch(pt,ms,rep,messageBatchSizeBytes ms)
-      Resource.injectWithRecovery p.state p.conn.Config.requestRetryPolicy (sendBatch p) batch)
+      Resource.injectWithRecovery p.conn.Config.requestRetryPolicy p.state (sendBatch p) batch)
     |> Async.Parallel
     |> Async.map Success
 
@@ -588,13 +588,13 @@ module Producer =
   /// selected here will override the partition function that is configured
   /// in ProducerConfig value passed in when connecting to Kafka.
   let produceBatch (p:Producer) (createBatch:PartitionCount -> Partition * ProducerMessage[]) =
-    Resource.injectWithRecovery p.state p.conn.Config.requestRetryPolicy (produceBatchInternal p) createBatch
+    Resource.injectWithRecovery p.conn.Config.requestRetryPolicy p.state (produceBatchInternal p) createBatch
 
   /// Produces a batch of messages, by assigning a partition to each message,
   /// grouping messages by partitions and sending batches by partition in
   /// parallel and collecting the results.
   let produceBatched (p:Producer) (batch:ProducerMessage seq) =
-    Resource.injectWithRecovery p.state p.conn.Config.requestRetryPolicy (produceBatchedInternal p) batch
+    Resource.injectWithRecovery p.conn.Config.requestRetryPolicy p.state (produceBatchedInternal p) batch
 
   /// Produces a message. The message will be sent as part of a batch and the
   /// result will correspond to the offset produced by the entire batch.

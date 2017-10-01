@@ -182,21 +182,21 @@ module internal Chan =
       |> AsyncFunc.mapOut (snd >> Result.codiagExn)
       |> Faults.AsyncFunc.retryResultThrow id Exn.monoid config.connectRetryPolicy
 
-    let recovery (s:Socket, ver:int, _req:obj, ex:exn) = async {
-      Log.warn "recovering_tcp_connection|conn_id=%s remote_endpoint=%O version=%i error=\"%O\"" connId (EndPoint.endpoint ep) ver ex
+    let recover (s:Socket, ver:int, _req:obj, ex:exn) = async {
+      Log.warn "closing_tcp_connection|conn_id=%s remote_endpoint=%O version=%i error=\"%O\"" connId (EndPoint.endpoint ep) ver ex
       Disposable.tryDispose s }
 
     let! socketAgent = 
       Resource.recoverableRecreate 
         (fun _ _ -> conn ep)
-        recovery
+        recover
 
     let! send =
       socketAgent
       |> Resource.inject Socket.sendAll
 
-    let! receive =
-      let receive s buf = async {
+    let receive =
+      let receive s buf = async {        
         try
           let! received = Socket.receive s buf
           if received = 0 then 
@@ -207,8 +207,7 @@ module internal Chan =
         with ex ->
           Log.error "receive_failure|conn_id=%s remote_endpoint=%O error=\"%O\"" connId ep ex
           return Failure (ResourceErrorAction.RecoverResume (ex,0)) }
-      socketAgent 
-      |> Resource.injectResult receive
+      Resource.injectWithRecovery (RetryPolicy.constantMs 0) socketAgent receive
 
     /// An unframed input stream.
     let receiveStream =
@@ -240,11 +239,22 @@ module internal Chan =
       Session.requestReply
         (EndPoint.endpoint ep) Session.corrId encode decode RequestMessage.awaitResponse receiveStream send
 
-    let send =
+
+
+    let sessionR : IResource<ReqRepSession<_,_,_>> = 
+      socketAgent
+      |> Resource.mapAsync (fun socket -> async {
+        // TODO: send and receive via socket directly
+        let session =
+          Session.requestReply
+            (EndPoint.endpoint ep) Session.corrId encode decode RequestMessage.awaitResponse receiveStream send
+        return session })
+
+    let sendReceive =
       Session.send session
 
-    let send = 
-      send
+    let sendReceive = 
+      sendReceive
       |> AsyncFunc.timeoutOption config.requestTimeout
       |> Resource.timeoutIndep socketAgent
       |> AsyncFunc.catch
@@ -270,4 +280,4 @@ module internal Chan =
       |> Faults.AsyncFunc.retryResultList config.requestRetryPolicy
       |> AsyncFunc.mapOut (snd >> Result.mapError (List.map (Choice.fold (konst ChanTimeout) (ChanFailure))))
 
-    return  { ep = ep ; send = send ; task = session.Task } }
+    return  { ep = ep ; send = sendReceive ; task = session.Task } }

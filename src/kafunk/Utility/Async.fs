@@ -132,6 +132,12 @@ module Task =
       ivar.Task)
     |> join
 
+  let choose (a:Task<'a>) (b:Task<'a>) : Task<'a> =
+    failwith ""
+
+  let chooseChoice (a:Task<'a>) (b:Task<'b>) : Task<Choice<'a, 'b>> =
+    failwith ""
+
 [<Compile(Module)>]
 module Async =
 

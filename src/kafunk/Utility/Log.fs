@@ -12,8 +12,12 @@ type internal AsyncEvent<'a> (bufferSize:int) =
   let buf = new BlockingCollection<'a> (bufferSize)
   let evt = new Event<'a>()
   let trigger () =
-    for a in buf.GetConsumingEnumerable () do
-      evt.Trigger a
+    try
+      for a in buf.GetConsumingEnumerable () do
+        evt.Trigger a
+    with ex ->
+      printfn "Error triggering AsyncEvent: %O" ex
+      reraise ()
   do (let t = new Thread(ThreadStart(trigger)) in t.IsBackground <- true ; t.Start())
   
   /// Puts an event into a buffer to be published asyncrhonously.
@@ -76,10 +80,7 @@ type Logger = private {
 [<Compile(Module)>]
 module Log =
 
-  open System
-  open System.Collections.Concurrent
   open FSharp.Control
-  open System.IO
   open System.Text
 
   let private event = new AsyncEvent<LogEntry>(1000000)
@@ -98,8 +99,8 @@ module Log =
     let stdout = Console.OpenStandardOutput (bufferSize)
     let sw = new StreamWriter(stdout, Encoding.Default, bufferSize)
     sw.AutoFlush <- true
-    let dispose = Disposable.ofFun (fun () -> sw.Dispose () )
-    let subs = Event.Subscribe (fun e -> 
+    let dispose = Disposable.ofFun (fun () -> sw.Dispose ())
+    let subs = Event.Subscribe (fun e ->
       if e.level >= MinLevel then
         LogEntry.Print (e, sw))
     Disposable.ofDisposables [ subs ; dispose ]
