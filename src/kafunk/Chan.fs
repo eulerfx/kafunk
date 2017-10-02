@@ -29,7 +29,7 @@ type ChanConfig = {
   /// The request timeout.
   requestTimeout : TimeSpan
     
-  /// The request retry polify for timeouts and failures.
+  /// The request retry policy for timeouts and failures.
   requestRetryPolicy : RetryPolicy
 
   /// The buffer pool to use for requests.
@@ -144,14 +144,13 @@ module internal Chan =
   /// Gets the endpoint.
   let endpoint (ch:Chan) = ch.ep
 
-  let internal task (ch:Chan) = ch.task
-
   /// Creates a fault-tolerant channel to the specified endpoint.
   /// Recoverable failures are retried, otherwise escalated.
   /// Only a single channel per endpoint is needed.
   let connect (connId:string, apiVersion:ApiKey -> ApiVersion, config:ChanConfig, clientId:ClientId) (ep:EndPoint) : Async<Chan> = async {
     
-    let conn (ep:EndPoint) = async {
+    let create (version:int) = async {
+
       let ipep = EndPoint.endpoint ep
       let connSocket =
         new Socket(
@@ -162,122 +161,182 @@ module internal Chan =
           ExclusiveAddressUse=true,
           ReceiveBufferSize=config.receiveBufferSize,
           SendBufferSize=config.sendBufferSize)
-      return! Socket.connect connSocket ipep }
+      let! socket = Socket.connect connSocket ipep
+
+      let send = Socket.sendAll socket
+      let receive = Socket.receive socket
+
+      /// An unframed input stream.
+      let receiveStream =
+        Socket.receiveStreamFrom config.receiveBufferSize receive
+        |> Framing.LengthPrefix.unframe
+
+      let bufferPool = config.bufferPool
+
+      /// A framing sender.
+      let send = 
+        Framing.LengthPrefix.frame >> send
+        |> AsyncFunc.tryFinally bufferPool.Free
+
+      /// Encodes the request into a session layer request, keeping ApiKey as state.
+      let encode (req:RequestMessage, correlationId:CorrelationId) =
+        let apiKey = req.ApiKey
+        let apiVer = apiVersion apiKey
+        let req = Request(apiVer, correlationId, clientId, req)
+        let size = Request.size (apiVer, req)
+        let buf = bufferPool.Alloc size
+        Request.Write (apiVer, req, BinaryZipper(buf))
+        buf,(apiKey,apiVer)
+
+      /// Decodes the session layer input and session state into a response.
+      let decode (_, (apiKey:ApiKey,apiVer:ApiVersion), buf:Binary.Segment) =
+        ResponseMessage.Read (apiKey,apiVer,BinaryZipper(buf))
+
+      let session =
+        Session.requestReply
+          (EndPoint.endpoint ep) Session.corrId encode decode RequestMessage.awaitResponse receiveStream send
+      
+      session.Task
+      |> Task.extend (fun t -> ())
+      |> ignore
+
+      return session
+
+      }
+
+    //let conn (ep:EndPoint) = async {
+    //  let ipep = EndPoint.endpoint ep
+    //  let connSocket =
+    //    new Socket(
+    //      ipep.AddressFamily,
+    //      SocketType.Stream,
+    //      ProtocolType.Tcp,
+    //      NoDelay=not(config.useNagle),
+    //      ExclusiveAddressUse=true,
+    //      ReceiveBufferSize=config.receiveBufferSize,
+    //      SendBufferSize=config.sendBufferSize)
+    //  return! Socket.connect connSocket ipep }
     
-    let conn =
-      conn
-      |> AsyncFunc.timeoutResult config.connectTimeout
-      |> AsyncFunc.catchResult
-      |> AsyncFunc.doBeforeAfter
-          (fun ep -> Log.info "tcp_connecting|conn_id=%s remote_endpoint=%O" connId (EndPoint.endpoint ep))
-          (fun (ep,res) ->
-            let ipep = EndPoint.endpoint ep
-            match res with
-            | Success s ->
-              Log.info "tcp_connected|conn_id=%s remote_endpoint=%O local_endpoint=%O" connId s.RemoteEndPoint s.LocalEndPoint
-            | Failure (Choice1Of2 _) ->
-              Log.warn "tcp_connection_timed_out|conn_id=%s remote_endpoint=%O timeout=%O" connId ipep config.connectTimeout
-            | Failure (Choice2Of2 e) ->
-              Log.error "tcp_connection_failed|conn_id=%s remote_endpoint=%O error=\"%O\"" connId ipep e)
-      |> AsyncFunc.mapOut (snd >> Result.codiagExn)
-      |> Faults.AsyncFunc.retryResultThrow id Exn.monoid config.connectRetryPolicy
+    //let conn =
+    //  conn
+    //  |> AsyncFunc.timeoutResult config.connectTimeout
+    //  |> AsyncFunc.catchResult
+    //  |> AsyncFunc.doBeforeAfter
+    //      (fun ep -> Log.info "tcp_connecting|conn_id=%s remote_endpoint=%O" connId (EndPoint.endpoint ep))
+    //      (fun (ep,res) ->
+    //        let ipep = EndPoint.endpoint ep
+    //        match res with
+    //        | Success s ->
+    //          Log.info "tcp_connected|conn_id=%s remote_endpoint=%O local_endpoint=%O" connId s.RemoteEndPoint s.LocalEndPoint
+    //        | Failure (Choice1Of2 _) ->
+    //          Log.warn "tcp_connection_timed_out|conn_id=%s remote_endpoint=%O timeout=%O" connId ipep config.connectTimeout
+    //        | Failure (Choice2Of2 e) ->
+    //          Log.error "tcp_connection_failed|conn_id=%s remote_endpoint=%O error=\"%O\"" connId ipep e)
+    //  |> AsyncFunc.mapOut (snd >> Result.codiagExn)
+    //  |> Faults.AsyncFunc.retryResultThrow id Exn.monoid config.connectRetryPolicy
 
-    let recover (s:Socket, ver:int, _req:obj, ex:exn) = async {
-      Log.warn "closing_tcp_connection|conn_id=%s remote_endpoint=%O version=%i error=\"%O\"" connId (EndPoint.endpoint ep) ver ex
-      Disposable.tryDispose s }
+    //let recover (s:Socket, ver:int, _req:obj, ex:exn) = async {
+    //  Log.warn "closing_tcp_connection|conn_id=%s remote_endpoint=%O version=%i error=\"%O\"" connId (EndPoint.endpoint ep) ver ex
+    //  Disposable.tryDispose s }
 
-    let! socketAgent = 
-      Resource.recoverableRecreate 
-        (fun _ _ -> conn ep)
-        recover
+    //let! socketAgent = 
+    //  Resource.recoverableRecreate 
+    //    (fun _ _ -> conn ep)
+    //    recover
 
-    let! send =
-      socketAgent
-      |> Resource.inject Socket.sendAll
+    //let! send =
+    //  socketAgent
+    //  |> Resource.inject Socket.sendAll
 
-    let receive =
-      let receive s buf = async {        
-        try
-          let! received = Socket.receive s buf
-          if received = 0 then 
-            Log.warn "received_empty_buffer|conn_id=%s remote_endpoint=%O" connId ep
-            return Failure (ResourceErrorAction.RecoverResume (exn("received_empty_buffer"),0))
-          else 
-            return Success received
-        with ex ->
-          Log.error "receive_failure|conn_id=%s remote_endpoint=%O error=\"%O\"" connId ep ex
-          return Failure (ResourceErrorAction.RecoverResume (ex,0)) }
-      Resource.injectWithRecovery (RetryPolicy.constantMs 0) socketAgent receive
+    //let receive =
+    //  let receive s buf = async {        
+    //    try
+    //      let! received = Socket.receive s buf
+    //      if received = 0 then 
+    //        Log.warn "received_empty_buffer|conn_id=%s remote_endpoint=%O" connId ep
+    //        return Failure (ResourceErrorAction.RecoverResume (exn("received_empty_buffer"),0))
+    //      else 
+    //        return Success received
+    //    with ex ->
+    //      Log.error "receive_failure|conn_id=%s remote_endpoint=%O error=\"%O\"" connId ep ex
+    //      return Failure (ResourceErrorAction.RecoverResume (ex,0)) }
+    //  Resource.injectWithRecovery (RetryPolicy.constantMs 0) socketAgent receive
 
-    /// An unframed input stream.
-    let receiveStream =
-      Socket.receiveStreamFrom config.receiveBufferSize receive
-      |> Framing.LengthPrefix.unframe
+    ///// An unframed input stream.
+    //let receiveStream =
+    //  Socket.receiveStreamFrom config.receiveBufferSize receive
+    //  |> Framing.LengthPrefix.unframe
 
-    let bufferPool = config.bufferPool
+    //let bufferPool = config.bufferPool
 
-    /// A framing sender.
-    let send = 
-      Framing.LengthPrefix.frame >> send
-      |> AsyncFunc.tryFinally bufferPool.Free
+    ///// A framing sender.
+    //let send = 
+    //  Framing.LengthPrefix.frame >> send
+    //  |> AsyncFunc.tryFinally bufferPool.Free
 
-    /// Encodes the request into a session layer request, keeping ApiKey as state.
-    let encode (req:RequestMessage, correlationId:CorrelationId) =
-      let apiKey = req.ApiKey
-      let apiVer = apiVersion apiKey
-      let req = Request(apiVer, correlationId, clientId, req)
-      let size = Request.size (apiVer, req)
-      let buf = bufferPool.Alloc size
-      Request.Write (apiVer, req, BinaryZipper(buf))
-      buf,(apiKey,apiVer)
+    ///// Encodes the request into a session layer request, keeping ApiKey as state.
+    //let encode (req:RequestMessage, correlationId:CorrelationId) =
+    //  let apiKey = req.ApiKey
+    //  let apiVer = apiVersion apiKey
+    //  let req = Request(apiVer, correlationId, clientId, req)
+    //  let size = Request.size (apiVer, req)
+    //  let buf = bufferPool.Alloc size
+    //  Request.Write (apiVer, req, BinaryZipper(buf))
+    //  buf,(apiKey,apiVer)
 
-    /// Decodes the session layer input and session state into a response.
-    let decode (_, (apiKey:ApiKey,apiVer:ApiVersion), buf:Binary.Segment) =
-      ResponseMessage.Read (apiKey,apiVer,BinaryZipper(buf))
+    ///// Decodes the session layer input and session state into a response.
+    //let decode (_, (apiKey:ApiKey,apiVer:ApiVersion), buf:Binary.Segment) =
+    //  ResponseMessage.Read (apiKey,apiVer,BinaryZipper(buf))
 
-    let session =
-      Session.requestReply
-        (EndPoint.endpoint ep) Session.corrId encode decode RequestMessage.awaitResponse receiveStream send
+    //let session =
+    //  Session.requestReply
+    //    (EndPoint.endpoint ep) Session.corrId encode decode RequestMessage.awaitResponse receiveStream send
 
+    let sessionR : Resource<ReqRepSession<_, _, _>> = failwith ""
 
+    let rpc (s:ReqRepSession<RequestMessage, ResponseMessage, _>) (req:RequestMessage) = async {
+      let! res = Session.send s req
+      match res with
+      | Success r -> 
+        return Success r
+      | Failure e -> 
+        //ResourceErrorAction.
+        return Failure (ResourceErrorAction.Retry (exn "")) }
 
-    let sessionR : IResource<ReqRepSession<_,_,_>> = 
-      socketAgent
-      |> Resource.mapAsync (fun socket -> async {
-        // TODO: send and receive via socket directly
-        let session =
-          Session.requestReply
-            (EndPoint.endpoint ep) Session.corrId encode decode RequestMessage.awaitResponse receiveStream send
-        return session })
+    let op =
+      Resource.injectWithRecovery 
+        config.requestRetryPolicy
+        sessionR
+        rpc
 
-    let sendReceive =
-      Session.send session
+    //let sendReceive =
+    //  Session.send session
 
-    let sendReceive = 
-      sendReceive
-      |> AsyncFunc.timeoutOption config.requestTimeout
-      |> Resource.timeoutIndep socketAgent
-      |> AsyncFunc.catch
-      |> AsyncFunc.mapOut (fun (_,res) ->
-        match res with
-        | Success (Some (Some res)) -> Success res
-        | Success _ -> Failure (Choice1Of2 ())
-        | Failure e -> Failure (Choice2Of2 e))
-      |> AsyncFunc.doBeforeAfter
-          //(fun _req -> (*Log.trace "sending_request|request=%s" (RequestMessage.Print req)*) ())
-          (ignore)
-          (fun (req,res) -> 
-            match res with
-            | Success _res -> 
-              ()
-              //Log.trace "received_response|response=%s" (ResponseMessage.Print res)
-            | Failure (Choice1Of2 ()) ->
-              Log.warn "request_timed_out|conn_id=%s ep=%O request=%s timeout=%O" 
-                connId ep (RequestMessage.Print req) config.requestTimeout
-            | Failure (Choice2Of2 e) ->
-              Log.warn "request_exception|conn_id=%s ep=%O request=%s error=\"%O\"" 
-                connId ep (RequestMessage.Print req) e)
-      |> Faults.AsyncFunc.retryResultList config.requestRetryPolicy
-      |> AsyncFunc.mapOut (snd >> Result.mapError (List.map (Choice.fold (konst ChanTimeout) (ChanFailure))))
+    //let sendReceive = 
+    //  sendReceive
+    //  |> AsyncFunc.timeoutOption config.requestTimeout
+    //  |> Resource.timeoutIndep socketAgent
+    //  |> AsyncFunc.catch
+    //  |> AsyncFunc.mapOut (fun (_,res) ->
+    //    match res with
+    //    | Success (Some (Some res)) -> Success res
+    //    | Success _ -> Failure (Choice1Of2 ())
+    //    | Failure e -> Failure (Choice2Of2 e))
+    //  |> AsyncFunc.doBeforeAfter
+    //      //(fun _req -> (*Log.trace "sending_request|request=%s" (RequestMessage.Print req)*) ())
+    //      (ignore)
+    //      (fun (req,res) -> 
+    //        match res with
+    //        | Success _res -> 
+    //          ()
+    //          //Log.trace "received_response|response=%s" (ResponseMessage.Print res)
+    //        | Failure (Choice1Of2 ()) ->
+    //          Log.warn "request_timed_out|conn_id=%s ep=%O request=%s timeout=%O" 
+    //            connId ep (RequestMessage.Print req) config.requestTimeout
+    //        | Failure (Choice2Of2 e) ->
+    //          Log.warn "request_exception|conn_id=%s ep=%O request=%s error=\"%O\"" 
+    //            connId ep (RequestMessage.Print req) e)
+    //  |> Faults.AsyncFunc.retryResultList config.requestRetryPolicy
+    //  |> AsyncFunc.mapOut (snd >> Result.mapError (List.map (Choice.fold (konst ChanTimeout) (ChanFailure))))
 
-    return  { ep = ep ; send = sendReceive ; task = session.Task } }
+    return  { ep = ep ; send = failwith "" ; task = (IVar.create ()).Task } }

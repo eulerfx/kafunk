@@ -291,8 +291,7 @@ with
 /// Send failures are propagated to the caller who is responsible for recreating the session.
 [<NoEquality;NoComparison;AutoSerializable(false)>]
 type ReqRepSession<'a, 'b, 's> internal
-  (
-    
+  (    
     /// The remote endpoint.
     remoteEndpoint:IPEndPoint,
 
@@ -358,7 +357,7 @@ type ReqRepSession<'a, 'b, 's> internal
       rep.SetResult res
     correlationId,sessionReq,rep
 
-  let rec receiveProcess = async {
+  let receiveProcess = async {
     try
       //Log.info "starting_receive_loop|remote_endpoint=%O" remoteEndpoint
       do! receive |> AsyncSeq.iter demux

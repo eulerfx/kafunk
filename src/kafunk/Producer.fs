@@ -426,7 +426,7 @@ module Producer =
       partitions = partitions } }
 
   /// Fetches cluster state and initializes a per-broker produce queue.
-  let private initProducer (conn:KafkaConn) (cfg:ProducerConfig) (ct:CancellationToken) (_prevState:ProducerState option) = async {
+  let private initProducer (conn:KafkaConn) (cfg:ProducerConfig) (_ver:int) (ct:CancellationToken) (_prevState:ProducerState option) = async {
 
     let! routes = getProducerRoutes conn cfg.topic
     let partitions = routes.partitions
