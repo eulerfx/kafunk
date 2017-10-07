@@ -219,63 +219,96 @@ type HandleEpoch = {
   version : int 
   state : IVar<unit> }
 
+type IHandle<'a> =
+  abstract Get : unit -> Async<HandleEpoch * 'a>
+  abstract Close : HandleEpoch -> Async<unit>
+  abstract Epochs : AsyncSeq<(HandleEpoch * 'a) option>
+
 type Handle<'a> (create:HandleEpoch -> 'a option -> Async<'a>, close:HandleEpoch -> 'a -> (obj * exn) option -> Async<unit>) = 
   
   let epochs : SVar<(HandleEpoch * 'a) option> = SVar.createFull None
   let node = IVar.create ()
   // TODO: link handle and instance state
 
-  let createEpoch (current:(HandleEpoch * 'a) option) = async {
-    let prevA = current |> Option.map snd
-    let epochState = IVar.create ()
-    let ep' =
-      match current with
-      | Some (ep,_) -> 
-        IVar.tryPut ep.state |> ignore
-        { version = ep.version + 1 ; state = epochState }
-      | None -> 
-        { version = 0 ; state = epochState }    
-    let! a = create ep' prevA
-    return Some (ep',a) }
+  let closeEpoch (ep:HandleEpoch, a:'a) = async {
+    ep.state |> IVar.tryPut () |> ignore
+    do! close ep a None }
 
-  let closeEpoch (ep:HandleEpoch) (current:(HandleEpoch * 'a) option) = async {
-    match current with
-    | None ->      
-      return None
-    | Some (ep',a) ->
-      if ep'.version = ep.version then
-        do! close ep a None
-        return None
-      else
-        return Some (ep',a) }
-
-  member __.Get () = async {
+  member internal __.Get () = async {
     let! epoch = epochs |> SVar.get
     match epoch with
-    | Some e -> return e
+    | Some e -> 
+      return e
     | None -> 
       let! _ = __.Open ()
       return! __.Get () }
  
-  member private __.Open () = 
-    epochs |> SVar.updateAsync createEpoch
+  member __.Open () = 
+    epochs 
+    |> SVar.updateAsync (fun (current:(HandleEpoch * 'a) option) -> async {
+      let prevA = current |> Option.map snd
+      let epochState = IVar.create ()
+      let! ep' = async {
+        match current with
+        | Some (ep,a) -> 
+          do! closeEpoch (ep,a)
+          return { version = ep.version + 1 ; state = epochState }
+        | None -> 
+          return { version = 0 ; state = epochState } }
+      let! a = create ep' prevA
+      return Some (ep',a) })
 
-  member __.Close (ep:HandleEpoch) = 
-    epochs |> SVar.updateAsync (closeEpoch ep) |> Async.Ignore
+  member internal __.Close (calling:HandleEpoch) = 
+    epochs 
+    |> SVar.updateAsync (fun (current:(HandleEpoch * 'a) option) -> async {
+      match current with
+      | None ->      
+        return None
+      | Some (ep',a) ->
+        if ep'.version = calling.version then
+          do! closeEpoch (calling,a)
+          return None
+        else
+          return Some (ep',a) })
+    |> Async.Ignore
+
+  member internal __.Epochs = 
+    epochs |> SVar.tap
 
   interface IDisposable with
     member __.Dispose () = ()
 
+/// Operations on handles.
 module Handle =
   
+  /// Creates a new handle with the specified create and close action.
   let create (create:HandleEpoch -> 'a option -> Async<'a>) (close:HandleEpoch -> 'a -> (obj * exn) option -> Async<unit>) =
     new Handle<'a>(create, close)
 
+  /// Returns the current instance of the handle, creating an instance of neccessary.
   let get (h:Handle<'a>) : Async<HandleEpoch * 'a> = 
     h.Get ()
 
+  /// Closes the specified epoch of the handle.
   let close (h:Handle<'a>) (ep:HandleEpoch) : Async<unit> = 
     h.Close ep
+
+  /// Returns a stream of epochs for the specified handle.
+  let epochs (h:Handle<'a>) : AsyncSeq<(HandleEpoch * 'a) option> = 
+    h.Epochs
+
+  let mapAsync (create:HandleEpoch -> 'a -> Async<'b>) (close:'a -> 'b -> Async<unit>) (h:Handle<'a>) : Handle<'b> =
+    let eps = SVar.create ()
+    epochs h
+    |> AsyncSeq.iterAsync (fun ep -> async {
+      match ep with
+      | Some (ep,a) -> 
+        let! b = create ep a
+        do! SVar.put (Some (ep,b)) eps
+      | None ->
+        do! SVar.put None eps })
+    |> Async.Start
+    failwith ""
 
   
 
