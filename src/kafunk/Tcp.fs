@@ -286,6 +286,9 @@ with
     let payload = Binary.shiftOffset 4 buf
     SessionMessage (txId,payload)
     
+/// An exception raised on failure to decode a raw TCP response.
+/// This is a fatal exception and should be escalated.
+type ResponseDecodeException (ex:exn) = inherit Exception ("There was an error decoding the raw TCP response.", ex)
 
 /// A multiplexed request/reply session.
 /// Maintains state between requests and responses and contains a process reading the input stream.
@@ -333,7 +336,7 @@ type ReqRepSession<'a, 'b, 's> internal
           Log.warn "received_response_was_already_cancelled|correlation_id=%i size=%i" correlationId sessionData.payload.Count
       with ex ->
         Log.error "response_decode_exception|correlation_id=%i error=\"%O\"" correlationId ex
-        reply.TrySetException ex |> ignore
+        reply.TrySetException (ResponseDecodeException(ex)) |> ignore
     else
       Log.trace "received_orphaned_response|correlation_id=%i in_flight_requests=%i" correlationId txs.Count
 

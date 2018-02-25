@@ -720,7 +720,7 @@ type KafkaConn internal (cfg:KafkaConfig) =
     Log.info "refreshing_metadata|conn_id=%s version=%i topics=%A bootstrap_broker=%A" 
       cfg.connId callerState.version topics (callerState.bootstrapBroker |> Option.map (Broker.endpoint))
     if critical then metadata callerState topics
-    else getAndApplyMetadata false callerState topics
+    else getAndApplyMetadata true callerState topics
 
   /// Fetches group coordinator metadata.
   and groupCoordinator (state:ClusterState) (groupId:GroupId) = async {
@@ -786,10 +786,14 @@ type KafkaConn internal (cfg:KafkaConfig) =
             else removeBrokerAndApply b state
           return Failure errs
        with ex ->
-        let! _state =
-          if critical then ClusterState.removeBroker b state
-          else removeBrokerAndApply b state
-        return Failure [ChanError.ChanFailure ex]
+        match Exn.tryFindByType<ResponseDecodeException> ex with
+        | Some ex ->
+          return raise ex
+        | None ->
+          let! _state =
+            if critical then ClusterState.removeBroker b state
+            else removeBrokerAndApply b state
+          return Failure [ChanError.ChanFailure ex]
     | Failure errs ->
       return Failure errs }
 
