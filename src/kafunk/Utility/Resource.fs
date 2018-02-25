@@ -138,10 +138,6 @@ type Resource<'r> internal (id:string, create:Task<unit> -> ResourceEpoch<'r> op
         | Some ex -> ResourceState.Faulted ex
         | None -> ResourceState.Closed)
 
-  member internal __.Extend (f:Resource<'r> -> Async<'b>) =
-    failwith ""
-
-
 /// A result of a resource-dependent operation.
 type ResourceResult<'a, 'e> = Result<'a, ResourceErrorAction<'a, 'e>>
 
@@ -156,7 +152,6 @@ and ResourceErrorAction<'a, 'e> =
 
   /// Retry without closing.
   | Retry of 'e
-
 
 /// Operations on resources.
 module Resource =
@@ -180,21 +175,12 @@ module Resource =
     do! ensureOpen r
     return r }
 
-  let createChild
-    (name:string) 
-    (parent:Resource<'r>)
-    (create:ResourceEpoch<'r> -> Task<unit> -> 'r option -> Async<'r>) 
-    (close:('b * int * obj * exn) -> Async<unit>) : Async<Resource<'b>> = async {
-
-    return failwith "" }
-
   let get (r:Resource<'r>) : Async<'r> =
     r.Get () |> Async.map (fun ep -> ep.resource)
 
   let injectWithRecovery (rp:RetryPolicy) (op:'r -> ('a -> Async<Result<'b, ResourceErrorAction<'b, exn>>>)) (r:Resource<'r>) (a:'a) : Async<'b> =
     let rec go (rs:RetryState) = async {
       let! ep = r.Get ()
-      //let! b = op ep.resource a
       let! b = Async.cancelWithTaskThrow ep.state.Task (op ep.resource a)
       match b with
       | Success b -> 

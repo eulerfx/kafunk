@@ -283,6 +283,7 @@ module internal Chan =
           do! Resource.fault socketAgent ex })
       |> Async.StartAsTask
 
+    // TODO: timeout should retry rather than fail?
     let send = 
       Session.send session
       |> Faults.AsyncFunc.retryAsyncConditional config.requestRetryPolicy

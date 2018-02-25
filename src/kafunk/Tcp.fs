@@ -344,9 +344,11 @@ type ReqRepSession<'a, 'b, 's> internal
     let correlationId = correlationId ()
     let rep = TaskCompletionSource<_>()    
     let sessionReq,state = encode (req,correlationId)
-    let cancel () =
-      //if rep.TrySetResult None then
-      if rep.TrySetException (OperationCanceledException()) then
+    let cancel error =
+      let inProgress = 
+        if error then rep.TrySetException (OperationCanceledException())
+        else rep.TrySetResult None 
+      if inProgress then
         let endTime = DateTime.UtcNow
         let elapsed = endTime - startTime
         Log.trace "request_cancelled|remote_endpoint=%O correlation_id=%i in_flight_requests=%i state=%A start_time=%s end_time=%s elapsed_sec=%f" 
@@ -360,8 +362,8 @@ type ReqRepSession<'a, 'b, 's> internal
       //    remoteEndpoint correlationId elapsed.TotalSeconds
         
     let ct = ctr
-    ct.Register (Action(cancel)) |> ignore
-    Task.Delay(requestTimeout).ContinueWith(fun _ -> cancel ()) |> ignore
+    ct.Register (Action(fun () -> cancel true)) |> ignore
+    Task.Delay(requestTimeout, ct).ContinueWith(fun t -> if not t.IsCanceled then cancel false) |> ignore
 
     match awaitResponse req with
     | None ->
