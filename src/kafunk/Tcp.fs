@@ -390,7 +390,7 @@ type ReqRepSession<'a, 'b, 's> internal
       return raise ex }
 
   member internal __.Close () = async {
-    Log.info "session_closed|remote_endpoint=%O" remoteEndpoint
+    Log.trace "session_closed|remote_endpoint=%O" remoteEndpoint
     ctr <- CancellationToken.None
     return () }
 

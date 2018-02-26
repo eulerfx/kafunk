@@ -774,7 +774,7 @@ type KafkaConn internal (cfg:KafkaConfig) =
     let! ch = getBrokerChan critical state b
     match ch with
     | Success ch ->
-      Log.trace "sending_to_broker|node_id=%i ep=%O req=%s" b.nodeId (Broker.endpoint b) (RequestMessage.Print req)
+      //Log.trace "sending_to_broker|node_id=%i ep=%O req=%s" b.nodeId (Broker.endpoint b) (RequestMessage.Print req)
       try
         let! chanRes = Chan.send ch req
         match chanRes with
