@@ -4,6 +4,7 @@ NUGET
     Crc32C.NET (1.0.5)
     FSharp.Control.AsyncSeq (2.0.18)
     FSharp.Core (3.1.2.5)
+    lz4net (1.0.15.93)
     Snappy.NET (1.1.1.8)
       Crc32C.NET (>= 1.0.5)
 

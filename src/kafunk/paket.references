@@ -1,3 +1,4 @@
 FSharp.Core
 FSharp.Control.AsyncSeq
 Snappy.NET
+lz4net

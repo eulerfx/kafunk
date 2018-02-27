@@ -54,7 +54,7 @@ let connCfg =
     //requestRetryPolicy = RetryPolicy.constantBoundedMs 1000 10,
     bootstrapConnectRetryPolicy = KafkaConfig.DefaultBootstrapConnectRetryPolicy,
     //bootstrapConnectRetryPolicy = RetryPolicy.constantBoundedMs 1000 3,
-    version = Versions.V_0_10_1,
+    version = Versions.V_0_9_0,
     autoApiVersions = false
     )
 
@@ -69,7 +69,7 @@ let producerCfg =
     bufferSizeBytes = ProducerConfig.DefaultBufferSizeBytes,
     batchSizeBytes = 100000, //ProducerConfig.DefaultBatchSizeBytes,
     batchLingerMs = 100,
-    compression = CompressionCodec.None,
+    compression = CompressionCodec.LZ4,
     maxInFlightRequests = 1
     )
 

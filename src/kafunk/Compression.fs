@@ -1,12 +1,12 @@
 [<Compile(Module)>]
 module internal Kafunk.Compression
 
+open System
 open System.IO
 open System.IO.Compression
-
 open Kafunk
 
-let private createMessage (value:Value) (compression:byte) =
+let private createMessage (value:ArraySegment<byte>) (compression:byte) =
   let attrs = compression |> int8
   Message.create value Binary.empty (Some attrs)
 
@@ -153,11 +153,61 @@ module Snappy =
     let buf = CompressedMessage.decompress m.value 
     MessageSet.Read (messageVer, 0, 0s, buf.Count, true, BinaryZipper(buf))
   
+[<Compile(Module)>]
+module LZ4 =
+
+  open LZ4
+
+  let compress ver ms =
+    Stream.compress 
+      CompressionCodec.LZ4 
+      (fun memStream -> upcast new LZ4Stream(memStream, LZ4StreamMode.Compress, LZ4StreamFlags.IsolateInnerStream))
+      ver
+      ms
+
+  let decompress ver m =
+    Stream.decompress 
+      (fun memStream -> upcast new LZ4Stream(memStream, LZ4StreamMode.Decompress, LZ4StreamFlags.IsolateInnerStream)) 
+      ver 
+      m
+
+  //let compress (messageVer:ApiVersion) (ms:MessageSet) =    
+  //  let buf = MessageSet.Size (messageVer,ms) |> Binary.zeros
+  //  MessageSet.Write (messageVer,ms,BinaryZipper(buf))
+  //  let maxLen = LZ4Codec.MaximumOutputLength buf.Count
+  //  let outBuf = Binary.zeros maxLen
+  //  let written = LZ4Codec.Encode(buf.Array, buf.Offset, buf.Count, outBuf.Array, outBuf.Offset, outBuf.Count)
+  //  let outBuf = ArraySegment(outBuf.Array, outBuf.Offset, written)
+  //  if written <= 0 then failwith "compression failed" else
+  //  createMessage outBuf CompressionCodec.LZ4
+    
+  //let decompress (messageVer:ApiVersion) (m:Message) =
+  //  let guessedOutputLength = m.value.Count * 10
+  //  //let buf = Binary.zeros outputLength
+  //  //let decoded = LZ4Codec.Decode(m.value.Array, m.value.Offset, m.value.Count, buf.Array, buf.Offset, buf.Count, false)
+  //  //let buf = ArraySegment(buf.Array, buf.Count, decoded)
+  //  let buf = LZ4Codec.Decode(m.value.Array, m.value.Offset, m.value.Count, guessedOutputLength)
+  //  let buf = Binary.ofArray buf
+  //  MessageSet.Read (messageVer, 0, 0s, buf.Count, true, BinaryZipper(buf))
+
+  //let compress (messageVer:ApiVersion) (ms:MessageSet) =
+  //  let buf = MessageSet.Size (messageVer,ms) |> Binary.zeros
+  //  MessageSet.Write (messageVer,ms,BinaryZipper(buf))
+  //  let compressed = LZ4.LZ4Codec.Wrap (buf.Array, buf.Offset, buf.Count)
+  //  createMessage (Binary.ofArray compressed) CompressionCodec.LZ4
+    
+  //let decompress (messageVer:ApiVersion) (m:Message) =
+  //  let decompressed = LZ4.LZ4Codec.Unwrap(m.value.Array, m.value.Offset)
+  //  let buf = Binary.ofArray decompressed
+  //  MessageSet.Read (messageVer, 0, 0s, buf.Count, true, BinaryZipper(buf))
+  
+
 let compress (messageVer:int16) (compression:byte) (ms:MessageSet) =
   match compression with
   | CompressionCodec.None -> ms
   | CompressionCodec.GZIP -> MessageSet.ofMessage messageVer (GZip.compress messageVer ms)
   | CompressionCodec.Snappy -> MessageSet.ofMessage messageVer (Snappy.compress messageVer ms)
+  | CompressionCodec.LZ4 -> MessageSet.ofMessage messageVer (LZ4.compress messageVer ms)
   | _ -> failwithf "Incorrect compression codec %A" compression
   
 let decompress (messageVer:int16) (ms:MessageSet) =
@@ -172,6 +222,9 @@ let decompress (messageVer:int16) (ms:MessageSet) =
         decompressed.messages
       | CompressionCodec.Snappy ->
         let decompressed = Snappy.decompress messageVer msi.message
+        decompressed.messages
+      | CompressionCodec.LZ4 ->
+        let decompressed = LZ4.decompress messageVer msi.message
         decompressed.messages
       | c -> failwithf "compression_code=%i not supported" c)
     |> MessageSet

@@ -70,6 +70,9 @@ module Protocol =
     [<Literal>]
     let Snappy = 2uy
 
+    [<Literal>]
+    let LZ4 = 3uy
+
   /// A Kafka message key (bytes).
   type Key = System.ArraySegment<byte>
 
