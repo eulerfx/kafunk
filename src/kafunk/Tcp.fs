@@ -321,10 +321,12 @@ type ReqRepSession<'a, 'b, 's> internal
 
   static let Log = Log.create "Kafunk.TcpSession"
 
+  // these fields define the state of the session
   let txs = new ConcurrentDictionary<CorrelationId, DateTime * 's * TaskCompletionSource<'b option>>()
+  let [<VolatileField>] mutable sessionTask : Task<unit> = null
 
-  let demux (data:Binary.Segment) =
-    let sessionData = SessionMessage.decode (data)
+  member private __.Demux (data:Binary.Segment) =
+    let sessionData = SessionMessage.decode data
     let correlationId = sessionData.tx_id
     let mutable token = Unchecked.defaultof<_>
     if txs.TryRemove(correlationId, &token) then
@@ -340,34 +342,18 @@ type ReqRepSession<'a, 'b, 's> internal
     else
       Log.trace "received_orphaned_response|correlation_id=%i in_flight_requests=%i" correlationId txs.Count
 
-  let [<VolatileField>] mutable ctr = CancellationToken.None
-
-  let mux (req:'a) =
+  member private __.Mux (sessionTask,req) =
     let startTime = DateTime.UtcNow
     let correlationId = correlationId ()
     let rep = TaskCompletionSource<_>()    
     let sessionReq,state = encode (req,correlationId)
-    let cancel error =
-      let inProgress = 
-        if error then rep.TrySetException (OperationCanceledException())
-        else rep.TrySetResult None 
-      if inProgress then
-        let endTime = DateTime.UtcNow
-        let elapsed = endTime - startTime
-        Log.trace "request_cancelled|remote_endpoint=%O correlation_id=%i in_flight_requests=%i state=%A start_time=%s end_time=%s elapsed_sec=%f" 
-          remoteEndpoint correlationId txs.Count state (startTime.ToString("s")) (endTime.ToString("s")) elapsed.TotalSeconds
-        let mutable token = Unchecked.defaultof<_>
-        txs.TryRemove(correlationId, &token) |> ignore
-      //else
-      //  let endTime = DateTime.UtcNow
-      //  let elapsed = endTime - startTime
-      //  Log.trace "request_already_completed|remote_endpoint=%O correlation_id=%i elapsed_sec=%f"
-      //    remoteEndpoint correlationId elapsed.TotalSeconds
-        
-    let ct = ctr
-    ct.Register (Action(fun () -> cancel true)) |> ignore
-    Task.Delay(requestTimeout, ct).ContinueWith(fun t -> if not t.IsCanceled then cancel false) |> ignore
-
+    let timeout = Task.Delay(requestTimeout)
+    Task.WhenAny (timeout, sessionTask, rep.Task)
+    |> Task.extend (fun t ->
+      if obj.ReferenceEquals (t.Result, sessionTask) then __.Cancel (correlationId,true)
+      elif obj.ReferenceEquals (t.Result, timeout) then  __.Cancel (correlationId,false)
+      else ())
+    |> ignore      
     match awaitResponse req with
     | None ->
       if not (txs.TryAdd(correlationId, (startTime,state,rep))) then
@@ -377,13 +363,25 @@ type ReqRepSession<'a, 'b, 's> internal
       rep.SetResult (Some res)
     correlationId,sessionReq,rep
 
+  member private __.Cancel (correlationId,error) = 
+    let mutable token = Unchecked.defaultof<_>
+    if txs.TryRemove(correlationId, &token) then
+      let startTime,state,rep = token
+      let inProgress = 
+        if error then rep.TrySetException (OperationCanceledException())
+        else rep.TrySetResult None 
+      if inProgress then
+        let endTime = DateTime.UtcNow
+        let elapsed = endTime - startTime
+        Log.trace "request_cancelled|remote_endpoint=%O correlation_id=%i in_flight_requests=%i state=%A start_time=%s end_time=%s elapsed_sec=%f" 
+          remoteEndpoint correlationId txs.Count state (startTime.ToString("s")) (endTime.ToString("s")) elapsed.TotalSeconds
+
   /// Starts the session.
-  member internal __.Start () = async {
-    let! ct = Async.CancellationToken
-    ctr <- ct
+  member internal __.Start (task:Task<unit>) = async {
+    sessionTask <- task
     try
       Log.trace "starting_session|remote_endpoint=%O" remoteEndpoint
-      do! receive |> AsyncSeq.iter demux
+      do! receive |> AsyncSeq.iter __.Demux
       //Log.info "session_closed2|remote_endpoint=%O" remoteEndpoint
     with ex ->
       Log.error "session_exception|remote_endpoint=%O error=\"%O\"" remoteEndpoint ex
@@ -391,11 +389,11 @@ type ReqRepSession<'a, 'b, 's> internal
 
   member internal __.Close () = async {
     Log.trace "session_closed|remote_endpoint=%O" remoteEndpoint
-    ctr <- CancellationToken.None
+    sessionTask <- Task.never
     return () }
 
-  member internal __.Send (req:'a) = async {
-    let _correlationId,sessionData,rep = mux req
+  member internal __.Send (req:'a) = async {    
+    let _correlationId,sessionData,rep = __.Mux (sessionTask,req)
     let! _sent = send sessionData
     return! rep.Task |> Async.awaitTaskCancellationAsError }
 

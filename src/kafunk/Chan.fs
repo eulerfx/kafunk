@@ -272,7 +272,8 @@ module internal Chan =
         try
           match state with
           | ResourceState.Open (_,st) -> 
-            let! _ = Async.cancelWithTask st (session.Start ())
+            let! _ = Async.cancelWithTask st (session.Start st)
+            //do! session.Start ()
             return ()
           | ResourceState.Closed -> 
             do! session.Close ()
